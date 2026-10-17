@@ -5483,6 +5483,7 @@ dependencies = [
  "serde_json",
  "stream-download",
  "tokio",
+ "tokio-util",
  "unicode-segmentation",
 ]
 
@@ -6187,6 +6188,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

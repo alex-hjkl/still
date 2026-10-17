@@ -5,7 +5,10 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
-use stream_download::{Settings, StreamDownload, storage::temp::TempStorageProvider};
+use stream_download::{
+    Settings, StreamDownload, http::HttpStream, storage::temp::TempStorageProvider,
+};
+use tokio_util::sync::CancellationToken;
 
 type AudioSource = Box<dyn Source<Item = f32> + Send>;
 
@@ -97,7 +100,7 @@ impl Player {
                 };
                 let mut output = None;
                 let mut sink: Option<AudioPlayer> = None;
-                let mut preparation: Option<tokio::task::JoinHandle<()>> = None;
+                let mut preparation: Option<Preparation> = None;
                 let mut generation = 0;
                 let mut volume = initial_volume.clamp(0., 1.);
                 let mut paused = false;
@@ -106,9 +109,7 @@ impl Player {
                         Ok(Command::Play(id, url)) => {
                             generation = id;
                             paused = false;
-                            if let Some(task) = preparation.take() {
-                                task.abort();
-                            }
+                            drop(preparation.take());
                             if let Some(previous) = sink.take() {
                                 previous.stop();
                             }
@@ -118,10 +119,14 @@ impl Player {
                                 ..Playback::default()
                             };
                             let feedback = feedback.clone();
-                            preparation = Some(runtime.spawn(async move {
-                                let result = prepare_audio(url).await;
+                            let cancel = CancellationToken::new();
+                            let token = cancel.clone();
+                            let task = runtime.spawn(async move {
+                                let result =
+                                    prepare_audio(url, token, Duration::from_secs(30)).await;
                                 let _ = feedback.send(Command::Prepared(id, result));
-                            }));
+                            });
+                            preparation = Some(Preparation { cancel, task });
                         }
                         Ok(Command::Prepared(id, result)) if id == generation => {
                             let result = result.and_then(|source| {
@@ -181,9 +186,7 @@ impl Player {
                         Ok(Command::Stop) => {
                             // Invalidate any preparation that completed just before cancellation.
                             generation = generation.wrapping_add(1);
-                            if let Some(task) = preparation.take() {
-                                task.abort();
-                            }
+                            drop(preparation.take());
                             if let Some(sink) = sink.take() {
                                 sink.stop();
                             }
@@ -204,9 +207,7 @@ impl Player {
                         };
                     }
                 }
-                if let Some(task) = preparation {
-                    task.abort();
-                }
+                drop(preparation);
                 if let Some(sink) = sink {
                     sink.stop();
                 }
@@ -253,19 +254,109 @@ impl Drop for Player {
     }
 }
 
-async fn prepare_audio(url: Url) -> Result<AudioSource, String> {
-    // HTTP buffering runs on Tokio; the blocking decoder stays off both the UI and runtime threads.
-    let reader = tokio::time::timeout(
-        Duration::from_secs(30),
-        StreamDownload::new_http(
-            url,
-            TempStorageProvider::new(),
-            Settings::default().prefetch_bytes(64 * 1024),
-        ),
+struct Preparation {
+    cancel: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for Preparation {
+    fn drop(&mut self) {
+        // Cancel the transport before aborting the async waiter. A decoder already
+        // running in spawn_blocking must be woken by the stream cancellation.
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+
+struct DownloadGuard {
+    cancel: CancellationToken,
+    observer: tokio::task::JoinHandle<()>,
+}
+impl Drop for DownloadGuard {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.observer.abort();
+    }
+}
+struct CancellableSource {
+    inner: AudioSource,
+    _download: DownloadGuard,
+}
+impl Iterator for CancellableSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        self.inner.next()
+    }
+}
+impl Source for CancellableSource {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(position)
+    }
+}
+
+async fn prepare_audio(
+    url: Url,
+    cancel: CancellationToken,
+    limit: Duration,
+) -> Result<AudioSource, String> {
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("Audio loading canceled".into()),
+        result = tokio::time::timeout(limit, prepare_stream(url, cancel.clone())) => {
+            result.unwrap_or_else(|_| Err("The server took too long to prepare the track".to_owned()))
+        }
+    };
+    if result.is_err() {
+        cancel.cancel();
+    }
+    result
+}
+
+async fn prepare_stream(url: Url, cancel: CancellationToken) -> Result<AudioSource, String> {
+    use std::sync::OnceLock;
+    static HTTP: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    let client = HTTP
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(Duration::from_secs(15))
+                .build()
+                .map_err(|_| "Could not create the audio HTTP client".to_owned())
+        })
+        .as_ref()
+        .map_err(Clone::clone)?
+        .clone();
+    let stream = HttpStream::new(client, url)
+        .await
+        .map_err(|_| "Could not load audio from Navidrome".to_owned())?;
+    let reader = StreamDownload::from_stream(
+        stream,
+        TempStorageProvider::new(),
+        Settings::default().prefetch_bytes(64 * 1024),
     )
     .await
-    .map_err(|_| "The server took too long to load the track".to_owned())?
-    .map_err(|_| "Could not load audio from Navidrome".to_owned())?;
+    .map_err(|_| "Could not buffer audio from Navidrome".to_owned())?;
+    let stream_cancel = reader.cancellation_token();
+    let token = stream_cancel.clone();
+    let observer = tokio::spawn(async move {
+        cancel.cancelled().await;
+        token.cancel();
+    });
+    let guard = DownloadGuard {
+        cancel: stream_cancel,
+        observer,
+    };
     let byte_len = reader.content_length();
     tokio::task::spawn_blocking(move || {
         let mut decoder = Decoder::builder()
@@ -276,7 +367,12 @@ async fn prepare_audio(url: Url) -> Result<AudioSource, String> {
         }
         decoder
             .build()
-            .map(|decoder| Box::new(decoder) as AudioSource)
+            .map(|decoder| {
+                Box::new(CancellableSource {
+                    inner: Box::new(decoder),
+                    _download: guard,
+                }) as AudioSource
+            })
             .map_err(|_| "Could not decode the audio format".to_owned())
     })
     .await
@@ -325,6 +421,78 @@ mod tests {
         assert!(playback.needs_restart());
     }
 
+    fn stalled_audio_server() -> (
+        Url,
+        tokio::sync::oneshot::Receiver<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::Read;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/stream", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let (ready, received) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\nRIFF").unwrap();
+            let _ = ready.send(());
+            // The server deliberately stalls. Cancel/timeout must close the body
+            // instead of leaving a blocking decoder and downloader alive.
+            let mut byte = [0];
+            assert_eq!(socket.read(&mut byte).unwrap(), 0);
+        });
+        (url, received, worker)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn canceling_preparation_closes_a_stalled_stream() {
+        let (url, ready, server) = stalled_audio_server();
+        let token = CancellationToken::new();
+        let loading = tokio::spawn(prepare_audio(url, token.clone(), Duration::from_secs(10)));
+        ready.await.unwrap();
+        token.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), loading)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preparation_deadline_also_cancels_a_blocked_decoder() {
+        let (url, ready, server) = stalled_audio_server();
+        let token = CancellationToken::new();
+        let loading = tokio::spawn(prepare_audio(
+            url,
+            token.clone(),
+            Duration::from_millis(250),
+        ));
+        ready.await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), loading)
+            .await
+            .unwrap()
+            .unwrap()
+            .err()
+            .unwrap();
+        assert!(error.contains("too long"));
+        assert!(token.is_cancelled());
+        server.join().unwrap();
+    }
+
     fn audio_server(body: Vec<u8>) -> (Url, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/stream", listener.local_addr().unwrap())
@@ -369,7 +537,9 @@ mod tests {
             wav.extend(8192i16.to_le_bytes());
         }
         let (url, server) = audio_server(wav);
-        let mut source = prepare_audio(url).await.unwrap();
+        let mut source = prepare_audio(url, CancellationToken::new(), Duration::from_secs(5))
+            .await
+            .unwrap();
         assert_eq!(source.sample_rate().get(), 8000);
         assert_eq!(source.channels().get(), 1);
         assert!((source.next().unwrap() - 0.25).abs() < 0.001);
@@ -385,7 +555,11 @@ mod tests {
     async fn rejects_non_audio_server_responses() {
         let (url, server) =
             audio_server(b"{\"subsonic-response\":{\"status\":\"failed\"}}".to_vec());
-        assert!(prepare_audio(url).await.is_err());
+        assert!(
+            prepare_audio(url, CancellationToken::new(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
         server.join().unwrap();
     }
 }

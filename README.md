@@ -123,6 +123,13 @@ and diagnostics in `~/Library/Logs/Still/still.log`. `STILL_CONFIG_DIR` and
 `STILL_LOG_DIR` override those directories for isolated checks. Credentials are
 stored separately through GPUI's system credential API.
 
+Preferences failures are logged and shown in a separate notification. Pending
+changes stay in memory and saving is retried automatically. Invalid preferences
+fall back to defaults with an explanation.
+
+Audio preparation has a 30-second deadline covering both opening and decoding.
+Switching or stopping a song cancels its transport and wakes a blocked decoder.
+
 The panic hook records a backtrace before native unwinding can abort. A log already
 at least 5 MiB is rotated on startup to `still.previous.log`. Packaging retains a
 matching executable under `target/release/symbols/<UUID>/still` for symbolication.

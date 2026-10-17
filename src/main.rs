@@ -30,8 +30,7 @@ actions!(still, [Quit]);
 fn main() {
     diagnostics::init();
     let store = settings::SettingsStore::default();
-    let preferences = store.load().unwrap_or_default();
-    let settings = settings::Settings::new(preferences, store);
+    let settings = settings::Settings::from_store(store);
     let [width, height] = settings.value().window_size;
     Application::new()
         .with_assets(icons::Icons)

@@ -172,6 +172,8 @@ pub struct Settings {
     value: Preferences,
     sender: mpsc::Sender<Write>,
     worker: Option<thread::JoinHandle<()>>,
+    events: mpsc::Receiver<Option<String>>,
+    warning: Option<String>,
 }
 
 fn write_pending(store: &SettingsStore, pending: &mut Option<Preferences>) -> Result<()> {
@@ -182,35 +184,115 @@ fn write_pending(store: &SettingsStore, pending: &mut Option<Preferences>) -> Re
     Ok(())
 }
 
+fn persist(
+    store: &SettingsStore,
+    pending: &mut Option<Preferences>,
+    previous_error: &mut Option<String>,
+    events: &mpsc::Sender<Option<String>>,
+) -> Result<()> {
+    let had_pending = pending.is_some();
+    let result = write_pending(store, pending);
+    match &result {
+        Err(error) => {
+            let detail = format!("{error:#}");
+            if previous_error.as_ref() != Some(&detail) {
+                crate::diagnostics::event(&format!("Could not save preferences: {detail}"));
+                let _ = events.send(Some("Could not save preferences. Changes are kept in memory; saving will be retried.".into()));
+                *previous_error = Some(detail);
+            }
+        }
+        Ok(()) if had_pending => {
+            *previous_error = None;
+            let _ = events.send(None);
+        }
+        Ok(()) => {}
+    }
+    result
+}
+
 impl Settings {
+    pub fn from_store(store: SettingsStore) -> Self {
+        match store.load() {
+            Ok(value) => Self::new(value, store),
+            Err(error) => {
+                crate::diagnostics::event(&format!(
+                    "Could not read preferences; using defaults: {error:#}"
+                ));
+                let mut settings = Self::new(Preferences::default(), store);
+                settings.warning = Some("Could not read preferences. Defaults are in use.".into());
+                settings
+            }
+        }
+    }
+
     pub fn new(value: Preferences, store: SettingsStore) -> Self {
         let (sender, receiver) = mpsc::channel();
+        let (updates, events) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("still-settings".into())
             .spawn(move || {
                 let mut pending = None;
+                let mut previous_error = None;
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(400)) {
                         Ok(Write::Save(value)) => pending = Some(value),
                         Ok(Write::Flush(reply)) => {
-                            let _ = reply.send(write_pending(&store, &mut pending));
+                            let _ = reply.send(persist(
+                                &store,
+                                &mut pending,
+                                &mut previous_error,
+                                &updates,
+                            ));
                         }
                         Ok(Write::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            let _ = write_pending(&store, &mut pending);
+                            let _ = persist(&store, &mut pending, &mut previous_error, &updates);
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            let _ = write_pending(&store, &mut pending);
+                            let _ = persist(&store, &mut pending, &mut previous_error, &updates);
                         }
                     }
                 }
-            })
-            .expect("create settings worker");
+            });
+        let (worker, warning) = match worker {
+            Ok(worker) => (Some(worker), None),
+            Err(error) => {
+                crate::diagnostics::event(&format!("Could not start preferences worker: {error}"));
+                (
+                    None,
+                    Some(
+                        "Preferences cannot be saved: the background worker is unavailable.".into(),
+                    ),
+                )
+            }
+        };
         Self {
             value: value.normalized(),
             sender,
-            worker: Some(worker),
+            worker,
+            events,
+            warning,
         }
+    }
+
+    pub fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
+    }
+
+    pub fn poll(&mut self) -> bool {
+        let before = self.warning.clone();
+        while let Ok(warning) = self.events.try_recv() {
+            self.warning = warning;
+        }
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+        {
+            self.warning =
+                Some("Preferences cannot be saved: the background worker stopped.".into());
+        }
+        self.warning != before
     }
 
     pub fn value(&self) -> &Preferences {
@@ -236,8 +318,10 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         let _ = self.sender.send(Write::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            crate::diagnostics::event("Preferences worker panicked during shutdown");
         }
     }
 }
@@ -245,6 +329,42 @@ impl Drop for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_saves_report_a_warning_and_recover_without_losing_pending_changes() {
+        let root =
+            std::env::temp_dir().join(format!("still-settings-failure-{}", std::process::id()));
+        fs::write(&root, b"not a directory").unwrap();
+        let store = SettingsStore {
+            path: root.join("preferences.json"),
+        };
+        let mut settings = Settings::new(Preferences::default(), store.clone());
+        settings.update(|value| value.volume = 0.25);
+        assert!(settings.flush().blocking_recv().unwrap().is_err());
+        assert!(settings.poll());
+        assert!(settings.warning().is_some());
+        fs::remove_file(&root).unwrap();
+        settings.flush().blocking_recv().unwrap().unwrap();
+        assert!(settings.poll());
+        assert!(settings.warning().is_none());
+        assert_eq!(store.load().unwrap().volume, 0.25);
+        drop(settings);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_preferences_use_defaults_and_explain_the_fallback() {
+        let root =
+            std::env::temp_dir().join(format!("still-settings-invalid-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("preferences.json");
+        fs::write(&path, b"invalid json").unwrap();
+        let settings = Settings::from_store(SettingsStore { path });
+        assert_eq!(settings.value(), &Preferences::default());
+        assert!(settings.warning().is_some());
+        drop(settings);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn preferences_survive_restart_and_corrupt_files_fall_back_to_defaults() {

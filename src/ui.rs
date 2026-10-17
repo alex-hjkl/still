@@ -229,9 +229,14 @@ impl PlayerView {
             this.remember_folder();
             let pending = this.settings.flush();
             async move {
-                if let Ok(Err(error)) = pending.await {
-                    crate::diagnostics::event(&format!("Could not save preferences: {error}"));
-                    eprintln!("Could not save preferences: {error}");
+                match pending.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diagnostics::event(&format!(
+                        "Could not save preferences on exit: {error:#}"
+                    )),
+                    Err(_) => crate::diagnostics::event(
+                        "Preferences worker stopped before the final save",
+                    ),
                 }
             }
         }));
@@ -741,6 +746,9 @@ impl PlayerView {
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.settings.poll() {
+            cx.notify();
+        }
         for command in self.media.drain() {
             self.media_command(command, cx);
         }
@@ -1978,6 +1986,18 @@ impl Render for PlayerView {
             .font_family("Inter")
             .flex()
             .flex_col();
+        if let Some(warning) = self.settings.warning() {
+            root = root.child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .py_2()
+                    .bg(rgb(ERROR_BG))
+                    .text_color(rgb(ERROR_TEXT))
+                    .text_sm()
+                    .child(warning.to_owned()),
+            );
+        }
         if !connected {
             return root.child(self.connection_screen(cx));
         }
