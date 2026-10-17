@@ -1,0 +1,40 @@
+[package]
+name = "still"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "A quiet GPUI music player for Navidrome"
+
+[features]
+ui-tests = []
+
+[dependencies]
+anyhow = "1"
+gpui = "=0.2.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# GPUI 0.2.2 pulls xattr 0.2, which still uses libc's deprecated Linux ENOATTR alias.
+libc = "=0.2.186"
+md5 = "0.8"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls", "stream"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "symphonia-all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+stream-download = { version = "0.24.4", default-features = false, features = ["reqwest-rustls", "temp-storage"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+unicode-segmentation = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSString", "NSValue"] }
+objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+# Keep function names so panic backtraces and macOS reports can be decoded.
+strip = "debuginfo"
+

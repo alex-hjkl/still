@@ -1,0 +1,22 @@
+// Shared light palette for the library, connection screen, and native text inputs.
+pub const BG: u32 = 0xfafbf8;
+pub const PANEL: u32 = 0xf1f3ee;
+pub const BORDER: u32 = 0xd5ddcf;
+pub const TEXT: u32 = 0x253029;
+pub const MUTED: u32 = 0x606b5f;
+pub const ACCENT: u32 = 0x45643b;
+pub const ON_ACCENT: u32 = 0xffffff;
+pub const ACCENT_HOVER: u32 = 0x36502f;
+pub const SELECTED: u32 = 0xe3ecd9;
+pub const KEYBOARD_FOCUS: u32 = 0x5374a1;
+pub const LIKED: u32 = 0xb03958;
+pub const LIKED_BG: u32 = 0xf8e5eb;
+pub const HOVER: u32 = 0xe8ede3;
+pub const ARTWORK_BG: u32 = 0xe6ebdf;
+pub const ARTWORK_ICON: u32 = 0x73836a;
+pub const ERROR_BG: u32 = 0xfbefeb;
+pub const ERROR_TEXT: u32 = 0xa33328;
+pub const INPUT_BG: u32 = 0xffffff;
+pub const INPUT_BORDER: u32 = 0xb8c3af;
+pub const PLACEHOLDER: u32 = 0x6c7565;
+pub const SELECTION: u32 = 0x45643b30;

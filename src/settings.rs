@@ -1,0 +1,291 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
+use tokio::sync::oneshot;
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    #[default]
+    Artists,
+    Albums,
+    Songs,
+    Folders,
+    Liked,
+}
+
+impl Section {
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            0 => Self::Artists,
+            1 => Self::Albums,
+            2 => Self::Songs,
+            3 => Self::Folders,
+            _ => Self::Liked,
+        }
+    }
+    pub fn index(self) -> usize {
+        match self {
+            Self::Artists => 0,
+            Self::Albums => 1,
+            Self::Songs => 2,
+            Self::Folders => 3,
+            Self::Liked => 4,
+        }
+    }
+}
+
+// Connection details stay in Keychain. This file only contains UI preferences.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum FolderSelection {
+    Folder(String),
+    Song(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedFolder {
+    pub library_id: String,
+    pub path: String,
+    pub selected: Option<FolderSelection>,
+    pub filter: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Preferences {
+    pub volume: f32,
+    pub shuffle: bool,
+    pub sidebar_compact: bool,
+    pub last_section: Section,
+    pub window_size: [f32; 2],
+    pub last_folder: Option<SavedFolder>,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            volume: 0.7,
+            shuffle: false,
+            sidebar_compact: true,
+            last_section: Section::Artists,
+            window_size: [1120., 760.],
+            last_folder: None,
+        }
+    }
+}
+
+impl Preferences {
+    fn normalized(mut self) -> Self {
+        self.volume = if self.volume.is_finite() {
+            self.volume.clamp(0., 1.)
+        } else {
+            0.7
+        };
+        for (value, minimum) in self.window_size.iter_mut().zip([780., 640.]) {
+            *value = if value.is_finite() {
+                value.clamp(minimum, 10000.)
+            } else {
+                minimum
+            };
+        }
+        self
+    }
+}
+
+#[derive(Clone)]
+pub struct SettingsStore {
+    path: PathBuf,
+}
+
+impl Default for SettingsStore {
+    fn default() -> Self {
+        let directory = if let Some(path) = std::env::var_os("STILL_CONFIG_DIR") {
+            PathBuf::from(path)
+        } else if cfg!(target_os = "macos") {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                .join("Library/Application Support/Still")
+        } else if cfg!(target_os = "windows") {
+            PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("Still")
+        } else {
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+                })
+                .join("still")
+        };
+        Self {
+            path: directory.join("preferences.json"),
+        }
+    }
+}
+
+impl SettingsStore {
+    pub fn load(&self) -> Result<Preferences> {
+        match fs::read(&self.path) {
+            Ok(bytes) => Ok(serde_json::from_slice::<Preferences>(&bytes)?.normalized()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Preferences::default())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn save(&self, preferences: &Preferences) -> Result<()> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let parent = self.path.parent().context("Missing settings directory")?;
+        fs::create_dir_all(parent)?;
+        let temporary = parent.join(format!(
+            "preferences-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| {
+            fs::write(&temporary, serde_json::to_vec_pretty(preferences)?)?;
+            fs::rename(&temporary, &self.path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+}
+
+enum Write {
+    Save(Preferences),
+    Flush(oneshot::Sender<Result<()>>),
+    Shutdown,
+}
+
+pub struct Settings {
+    value: Preferences,
+    sender: mpsc::Sender<Write>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+fn write_pending(store: &SettingsStore, pending: &mut Option<Preferences>) -> Result<()> {
+    if let Some(value) = pending.as_ref() {
+        store.save(value)?;
+    }
+    *pending = None;
+    Ok(())
+}
+
+impl Settings {
+    pub fn new(value: Preferences, store: SettingsStore) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("still-settings".into())
+            .spawn(move || {
+                let mut pending = None;
+                loop {
+                    match receiver.recv_timeout(Duration::from_millis(400)) {
+                        Ok(Write::Save(value)) => pending = Some(value),
+                        Ok(Write::Flush(reply)) => {
+                            let _ = reply.send(write_pending(&store, &mut pending));
+                        }
+                        Ok(Write::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            let _ = write_pending(&store, &mut pending);
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let _ = write_pending(&store, &mut pending);
+                        }
+                    }
+                }
+            })
+            .expect("create settings worker");
+        Self {
+            value: value.normalized(),
+            sender,
+            worker: Some(worker),
+        }
+    }
+
+    pub fn value(&self) -> &Preferences {
+        &self.value
+    }
+
+    pub fn update(&mut self, change: impl FnOnce(&mut Preferences)) {
+        let previous = self.value.clone();
+        change(&mut self.value);
+        self.value = self.value.clone().normalized();
+        if self.value != previous {
+            let _ = self.sender.send(Write::Save(self.value.clone()));
+        }
+    }
+
+    pub fn flush(&self) -> oneshot::Receiver<Result<()>> {
+        let (sender, receiver) = oneshot::channel();
+        let _ = self.sender.send(Write::Flush(sender));
+        receiver
+    }
+}
+
+impl Drop for Settings {
+    fn drop(&mut self) {
+        let _ = self.sender.send(Write::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_survive_restart_and_corrupt_files_fall_back_to_defaults() {
+        let directory = std::env::temp_dir().join(format!("still-settings-{}", std::process::id()));
+        let store = SettingsStore {
+            path: directory.join("preferences.json"),
+        };
+        let mut settings = Settings::new(store.load().unwrap(), store.clone());
+        settings.update(|value| {
+            value.volume = 0.35;
+            value.shuffle = true;
+            value.sidebar_compact = false;
+            value.last_section = Section::Albums;
+            value.window_size = [980., 700.];
+            value.last_folder = Some(SavedFolder {
+                library_id: "fixture".into(),
+                path: "/music/Сборник 🎵".into(),
+                selected: Some(FolderSelection::Song("song-12".into())),
+                filter: "  Theme  ".into(),
+            });
+        });
+        settings.flush().blocking_recv().unwrap().unwrap();
+        assert_eq!(store.load().unwrap(), *settings.value());
+        drop(settings);
+        let restored = store.load().unwrap();
+        assert_eq!(restored.volume, 0.35);
+        assert!(restored.shuffle);
+        assert!(!restored.sidebar_compact);
+        assert_eq!(restored.last_section, Section::Albums);
+        assert_eq!(restored.window_size, [980., 700.]);
+        assert_eq!(restored.last_folder.unwrap().filter, "  Theme  ");
+        // The previous hide/show preference must never hide the sidebar now.
+        fs::write(&store.path, br#"{"sidebar_visible":false}"#).unwrap();
+        assert!(store.load().unwrap().sidebar_compact);
+        fs::write(&store.path, b"broken JSON").unwrap();
+        assert_eq!(store.load().unwrap_or_default(), Preferences::default());
+        fs::write(&store.path, br#"{"volume":5,"window_size":[-1,0]}"#).unwrap();
+        let restored = store.load().unwrap();
+        assert_eq!(restored.volume, 1.);
+        assert!(restored.sidebar_compact);
+        assert_eq!(restored.window_size, [780., 640.]);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

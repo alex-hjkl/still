@@ -1,0 +1,12 @@
+/target/
+/.local/
+/.env
+*.log
+
+__pycache__/
+.env.*
+.DS_Store
+*.pem
+*.key
+*.p12
+*.pfx
