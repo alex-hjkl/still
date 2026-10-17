@@ -124,11 +124,16 @@ and diagnostics in `~/Library/Logs/Still/still.log`. `STILL_CONFIG_DIR` and
 stored separately through GPUI's system credential API.
 
 Preferences failures are logged and shown in a separate notification. Pending
-changes stay in memory and saving is retried automatically. Invalid preferences
-fall back to defaults with an explanation.
+changes stay in memory and saving is retried with an increasing delay, up to
+30 seconds. Invalid preferences fall back to defaults with an explanation. Before
+the next save, the damaged file is preserved as `preferences.corrupt-*.json` in
+the same directory; a failed backup prevents overwriting the original.
 
 Audio preparation has a 30-second deadline covering both opening and decoding.
 Switching or stopping a song cancels its transport and wakes a blocked decoder.
+Slow seeking does not block Stop or Next. Repeated relative seeks accumulate,
+and pending seek targets are coalesced. Audio errors keep their underlying causes
+in diagnostics with request URLs redacted.
 If the audio worker stops unexpectedly, playback reports a recoverable error;
 retrying or pressing Play recreates the worker and keeps the queue and volume.
 

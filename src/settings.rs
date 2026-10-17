@@ -2,13 +2,14 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write as _,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::oneshot;
 
@@ -152,6 +153,7 @@ impl SettingsStore {
         ));
         let result = (|| {
             fs::write(&temporary, serde_json::to_vec_pretty(preferences)?)?;
+            self.preserve_corrupt()?;
             fs::rename(&temporary, &self.path)?;
             Ok(())
         })();
@@ -159,6 +161,58 @@ impl SettingsStore {
             let _ = fs::remove_file(temporary);
         }
         result
+    }
+
+    fn preserve_corrupt(&self) -> Result<()> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if serde_json::from_slice::<Preferences>(&bytes).is_ok() {
+            return Ok(());
+        }
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let backup = self.path.with_file_name(format!(
+            "preferences.corrupt-{stamp}-{}.json",
+            std::process::id()
+        ));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+            .context("Could not preserve damaged preferences")?;
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&backup);
+            return Err(error).context("Could not preserve damaged preferences");
+        }
+        crate::diagnostics::event("Preserved damaged preferences before replacing them");
+        Ok(())
+    }
+}
+
+// A new value debounces normal writes, but does not reset the backoff after a
+// failure. Flush and shutdown always make an immediate final attempt.
+#[derive(Default)]
+struct SaveSchedule {
+    deadline: Option<Instant>,
+    failures: usize,
+}
+impl SaveSchedule {
+    fn changed(&mut self, now: Instant) {
+        if self.failures == 0 {
+            self.deadline = Some(now + Duration::from_millis(400));
+        }
+    }
+    fn completed(&mut self, success: bool, now: Instant) {
+        if success {
+            *self = Self::default();
+        } else {
+            let seconds = [1, 2, 5, 15, 30][self.failures.min(4)];
+            self.failures = self.failures.saturating_add(1);
+            self.deadline = Some(now + Duration::from_secs(seconds));
+        }
     }
 }
 
@@ -233,23 +287,34 @@ impl Settings {
             .spawn(move || {
                 let mut pending = None;
                 let mut previous_error = None;
+                let mut schedule = SaveSchedule::default();
                 loop {
-                    match receiver.recv_timeout(Duration::from_millis(400)) {
-                        Ok(Write::Save(value)) => pending = Some(value),
+                    let command = if let Some(deadline) = schedule.deadline {
+                        receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    } else {
+                        receiver
+                            .recv()
+                            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                    };
+                    match command {
+                        Ok(Write::Save(value)) => {
+                            pending = Some(value);
+                            schedule.changed(Instant::now());
+                        }
                         Ok(Write::Flush(reply)) => {
-                            let _ = reply.send(persist(
-                                &store,
-                                &mut pending,
-                                &mut previous_error,
-                                &updates,
-                            ));
+                            let result =
+                                persist(&store, &mut pending, &mut previous_error, &updates);
+                            schedule.completed(result.is_ok(), Instant::now());
+                            let _ = reply.send(result);
                         }
                         Ok(Write::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                             let _ = persist(&store, &mut pending, &mut previous_error, &updates);
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            let _ = persist(&store, &mut pending, &mut previous_error, &updates);
+                            let result =
+                                persist(&store, &mut pending, &mut previous_error, &updates);
+                            schedule.completed(result.is_ok(), Instant::now());
                         }
                     }
                 }
@@ -331,6 +396,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retries_back_off_keep_the_latest_deadline_and_reset_after_success() {
+        let now = Instant::now();
+        let mut schedule = SaveSchedule::default();
+        schedule.changed(now);
+        assert_eq!(schedule.deadline, Some(now + Duration::from_millis(400)));
+        for seconds in [1, 2, 5, 15, 30, 30] {
+            schedule.completed(false, now);
+            assert_eq!(schedule.deadline, Some(now + Duration::from_secs(seconds)));
+            schedule.changed(now + Duration::from_millis(50));
+            assert_eq!(schedule.deadline, Some(now + Duration::from_secs(seconds)));
+        }
+        schedule.completed(true, now);
+        assert!(schedule.deadline.is_none());
+        schedule.changed(now);
+        assert_eq!(schedule.deadline, Some(now + Duration::from_millis(400)));
+    }
+
+    #[test]
     fn failed_saves_report_a_warning_and_recover_without_losing_pending_changes() {
         let root =
             std::env::temp_dir().join(format!("still-settings-failure-{}", std::process::id()));
@@ -344,10 +427,11 @@ mod tests {
         assert!(settings.poll());
         assert!(settings.warning().is_some());
         fs::remove_file(&root).unwrap();
+        settings.update(|value| value.volume = 0.45);
         settings.flush().blocking_recv().unwrap().unwrap();
         assert!(settings.poll());
         assert!(settings.warning().is_none());
-        assert_eq!(store.load().unwrap().volume, 0.25);
+        assert_eq!(store.load().unwrap().volume, 0.45);
         drop(settings);
         fs::remove_dir_all(root).unwrap();
     }
@@ -359,9 +443,28 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join("preferences.json");
         fs::write(&path, b"invalid json").unwrap();
-        let settings = Settings::from_store(SettingsStore { path });
+        let store = SettingsStore { path: path.clone() };
+        let mut settings = Settings::from_store(store.clone());
         assert_eq!(settings.value(), &Preferences::default());
         assert!(settings.warning().is_some());
+        settings.update(|value| value.volume = 0.3);
+        settings.flush().blocking_recv().unwrap().unwrap();
+        let backups: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("preferences.corrupt-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), b"invalid json");
+        assert_eq!(store.load().unwrap().volume, 0.3);
+        settings.update(|value| value.volume = 0.4);
+        settings.flush().blocking_recv().unwrap().unwrap();
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         drop(settings);
         fs::remove_dir_all(root).unwrap();
     }

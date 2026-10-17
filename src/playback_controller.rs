@@ -107,15 +107,16 @@ impl PlaybackController {
     }
     pub fn seek(&self, seconds: u64) {
         if let Some(song) = self.queue.current() {
-            self.player.seek(if song.duration > 0 {
-                seconds.min(song.duration)
-            } else {
-                seconds
-            });
+            self.player.seek(seconds, song.duration);
         }
     }
     pub fn seek_relative(&self, delta: i64) {
-        self.seek(self.state.position.as_secs().saturating_add_signed(delta));
+        self.skip(delta as f64);
+    }
+    fn skip(&self, seconds: f64) {
+        if let Some(song) = self.queue.current() {
+            self.player.seek_relative(seconds, song.duration);
+        }
     }
     fn stop(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -172,13 +173,7 @@ impl PlaybackController {
                     self.seek(position);
                 }
             }
-            MediaCommand::Skip { seconds } => {
-                if let Some(position) =
-                    seek_position(self.state.position.as_secs_f64() + seconds, duration)
-                {
-                    self.seek(position);
-                }
-            }
+            MediaCommand::Skip { seconds } => self.skip(seconds),
         }
     }
 

@@ -41,10 +41,20 @@ caused a Unicode layout crash.
 Audio preparation has one deadline for opening and decoding. A per-track token
 cancels the underlying downloader even when its decoder is already running on
 a blocking thread. A guard keeps that cancellation link alive for the source
-lifetime and removes it when the source is dropped.
+lifetime and removes it when the source is dropped. Relative seeks are resolved
+against the audio worker's position or its latest requested target, rather than a
+UI snapshot. One blocking seek runs at a time; subsequent targets are coalesced.
+Stop and Play cancel the old download without waiting for seek acknowledgement.
+Late seek results are ignored by generation. Audio failures retain their causes
+for diagnostics, with authenticated request URLs redacted and short UI messages.
 
 Preferences writes are coalesced in a worker. Failed writes keep the pending value,
-report a deduplicated error and retry. A successful write clears the warning.
+report a deduplicated error and retry after 1, 2, 5, 15 and then 30 seconds.
+New values replace the pending value without resetting failure backoff; flush and
+shutdown attempt an immediate save. A successful write clears the warning.
+Before overwriting malformed preferences, the worker preserves the original bytes
+in a unique `preferences.corrupt-*.json` file beside the preferences file. If the
+backup cannot be written, the save fails and the original remains in place.
 Preference warnings are rendered separately from library/playback failures.
 
 ## Verification boundaries

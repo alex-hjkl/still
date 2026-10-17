@@ -29,6 +29,9 @@ enum Step {
     Key {
         key: String,
     },
+    KeyBurst {
+        keys: Vec<String>,
+    },
     Text {
         text: String,
     },
@@ -38,6 +41,9 @@ enum Step {
     Media {
         #[serde(flatten)]
         command: crate::media::MediaCommand,
+    },
+    MediaBurst {
+        commands: Vec<crate::media::MediaCommand>,
     },
     Disconnect,
     StopAudioWorker,
@@ -283,6 +289,11 @@ impl Run {
             Step::Key { key } => {
                 window.dispatch_keystroke(gpui::Keystroke::parse(key)?, cx);
             }
+            Step::KeyBurst { keys } => {
+                for key in keys {
+                    window.dispatch_keystroke(gpui::Keystroke::parse(key)?, cx);
+                }
+            }
             Step::Text { text } => {
                 for character in text.chars() {
                     window.dispatch_keystroke(
@@ -299,6 +310,13 @@ impl Run {
             Step::Media { command } => {
                 if !self.view.read(cx).transport.test_media_command(command) {
                     bail!("Native media command was not accepted: {command:?}");
+                }
+            }
+            Step::MediaBurst { commands } => {
+                for command in commands {
+                    if !self.view.read(cx).transport.test_media_command(command) {
+                        bail!("Native media command was not accepted: {command:?}");
+                    }
                 }
             }
             Step::StopAudioWorker => self.view.read(cx).transport.test_stop_worker(),
