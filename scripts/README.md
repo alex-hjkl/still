@@ -10,6 +10,32 @@ the complete audio preparation deadline. Device-free Rodio tests hold a seek ope
 while checking accumulated relative seeks, target replacement, Stop, Next and
 stale completion rejection. HTTP error tests check retained causes and URL redaction.
 
+## Record the README demo
+
+On macOS with FFmpeg and the Xcode command-line tools installed:
+
+```sh
+python3 scripts/smoke-macos.py --record-demo .local/demo
+```
+
+This builds the `ui-tests` feature, launches an isolated app and local fixture
+server, and records only that process's window using macOS `screencapture`.
+The native driver displays keystroke captions and checks the resulting selection,
+navigation, playback and sidebar state. Original geometric covers, fictional
+metadata and silent generated audio come from `demo_fixture.py`. No saved login
+or real music library is used. The captions are excluded from normal releases.
+
+The output contains a looping GIF and a silent H.264 MP4. The native title bar is
+cropped out; no desktop, microphone or system audio is recorded. macOS may request
+Screen Recording access for the host that runs the script. Exported media has its
+metadata removed. Assertions and state snapshots are saved under `.local/ui-test-results/`.
+
+Before replacing `docs/demo/still.mp4`, inspect the entire
+recording for private content and check that captions match the actions. Then
+update its SHA-256 hash in `docs/demo/manifest.json`. The publication guard
+accepts only that exact reviewed file; changed or other binary files require
+another review. Keep raw captures and intermediate frames in `.local/`.
+
 ## Native macOS checks
 
 Build the binary, app bundle and architecture-specific ZIP with one command:

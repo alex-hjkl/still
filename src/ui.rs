@@ -161,6 +161,8 @@ pub struct PlayerView {
     pending_folder: Option<SavedFolder>,
     #[cfg(feature = "ui-tests")]
     ui_probe: std::rc::Rc<std::cell::RefCell<ui_tests::RenderProbe>>,
+    #[cfg(feature = "ui-tests")]
+    demo_hint: Option<ui_tests::DemoHint>,
     demo: bool,
 }
 
@@ -331,6 +333,8 @@ impl PlayerView {
             pending_folder: None,
             #[cfg(feature = "ui-tests")]
             ui_probe: Default::default(),
+            #[cfg(feature = "ui-tests")]
+            demo_hint: None,
             demo,
         };
         if demo {
@@ -1082,6 +1086,7 @@ impl Render for PlayerView {
         let _ = &self.subscriptions;
         let connected = self.connection.client.is_some() || self.demo;
         let mut root = div()
+            .relative()
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
@@ -1236,6 +1241,13 @@ impl Render for PlayerView {
                     }),
             )
             .child(self.player_bar(cx));
+        #[cfg(feature = "ui-tests")]
+        {
+            root = root.when_some(
+                ui_tests::demo_overlay(self.demo_hint.as_ref()),
+                |root, overlay| root.child(overlay),
+            );
+        }
         root
     }
 }

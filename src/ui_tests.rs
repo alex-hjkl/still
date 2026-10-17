@@ -26,6 +26,16 @@ pub(super) struct RenderProbe {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Step {
+    Wait {
+        milliseconds: u64,
+    },
+    DemoHint {
+        keys: String,
+        label: String,
+    },
+    Recording {
+        start: bool,
+    },
     Key {
         key: String,
     },
@@ -52,6 +62,53 @@ enum Step {
         expected: Box<Expected>,
     },
     Quit,
+}
+
+pub(super) struct DemoHint {
+    keys: SharedString,
+    label: SharedString,
+    shown: Instant,
+}
+
+pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
+    let hint = hint.filter(|hint| hint.shown.elapsed() < Duration::from_millis(4000))?;
+    Some(
+        div()
+            .absolute()
+            .bottom(px(124.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py_3()
+                    .rounded_lg()
+                    .bg(rgb(TEXT))
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .bg(rgb(SELECTED))
+                            .text_color(rgb(ACCENT))
+                            .text_size(px(20.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(hint.keys.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(ON_ACCENT))
+                            .text_size(px(16.))
+                            .child(hint.label.clone()),
+                    ),
+            ),
+    )
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -286,6 +343,39 @@ impl Run {
     fn step(&mut self, window: &mut Window, cx: &mut gpui::App) -> Result<bool> {
         let step = self.steps.front().context("UI script must end with quit")?;
         match step {
+            Step::Wait { milliseconds } => {
+                if self.waiting_since.elapsed() < Duration::from_millis(*milliseconds) {
+                    return Ok(true);
+                }
+            }
+            Step::DemoHint { keys, label } => {
+                self.view.update(cx, |view, cx| {
+                    view.demo_hint = Some(DemoHint {
+                        keys: keys.clone().into(),
+                        label: label.clone().into(),
+                        shown: Instant::now(),
+                    });
+                    cx.notify();
+                });
+            }
+            Step::Recording { start } => {
+                let directory = PathBuf::from(
+                    std::env::var_os("STILL_DEMO_CAPTURE")
+                        .context("Recording requires STILL_DEMO_CAPTURE")?,
+                );
+                let (signal, acknowledgement) = if *start {
+                    ("ready", "started")
+                } else {
+                    ("done", "finished")
+                };
+                fs::write(directory.join(signal), b"")?;
+                if !directory.join(acknowledgement).exists() {
+                    if self.waiting_since.elapsed() > Duration::from_secs(60) {
+                        bail!("Recorder did not acknowledge {signal}");
+                    }
+                    return Ok(true);
+                }
+            }
             Step::Key { key } => {
                 window.dispatch_keystroke(gpui::Keystroke::parse(key)?, cx);
             }

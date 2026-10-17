@@ -23,7 +23,9 @@ where practical; views adapt user input and asynchronous results to those models
   screen rendering and view-specific interactions.
 - `keyboard.rs`, `input.rs`: contextual commands and native Unicode/IME text input.
 - `requests.rs`, `failure.rs`: stale-request cancellation and operation-specific Retry.
-- `ui_tests.rs`: opt-in native regression driver, excluded from normal releases.
+- `ui_tests.rs`: opt-in native regression driver and paced demo captions, excluded
+  from normal releases. `scripts/demo_fixture.py` supplies synthetic demo records
+  and original covers; `scripts/demo_recording.py` captures the isolated window.
 
 API requests and image loading run on GPUI's background executor. Audio uses a
 separate command worker and a Tokio runtime; blocking decoder work stays off the
@@ -67,3 +69,27 @@ manual checks documented in `scripts/README.md`.
 
 Cyrillic and emoji in fixtures are intentional regression data, not untranslated
 interface copy or real library records. Test credentials and hosts are synthetic.
+
+## Runtime and dependency notes
+
+Audio preparation has a 30-second deadline covering opening and decoding. A failed
+or closed audio worker is recoverable without losing the queue, shuffle or volume.
+Diagnostics record underlying audio errors with request URLs redacted. Panic logs
+include a backtrace. Logs at least 5 MiB rotate to `still.previous.log` on startup;
+packaging keeps a matching executable under `target/release/symbols/<UUID>/still`.
+
+`NAVIDROME_URL`, `NAVIDROME_USERNAME` and `NAVIDROME_PASSWORD` can supply a connection
+for automation. Such connections default to not being remembered. `STILL_CONFIG_DIR`
+and `STILL_LOG_DIR` override preferences and diagnostics directories for isolated runs.
+Preferences preserve malformed JSON before replacement and keep failed saves pending.
+
+Folder trees are cached until refresh or disconnect. Recursive playback orders files
+by filename, then visits child folders by name. Album and song lists load 200 records
+per page. Metadata is displayed as supplied by Navidrome; fix incorrectly encoded tags
+in the source library. `scripts/check-paths.py` provides read-only path diagnostics.
+
+GPUI is pinned to published version 0.2.2. Its transitive `block` and
+`proc-macro-error2` dependencies produce future-compatibility warnings. The `libc`
+pin works around GPUI's old `xattr` dependency. Revisit these constraints after an
+upstream GPUI update. Rust is pinned by `rust-toolchain.toml`; `Cargo.lock` records
+dependency versions. Linux and Windows are not validated by the native UI suite.

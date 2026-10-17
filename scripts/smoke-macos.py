@@ -27,7 +27,9 @@ def main():
     parser.add_argument("--app", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/Still.app")
     parser.add_argument("--case", choices=["library", "filter", "connection", "folders", "unicode"], default="library")
     parser.add_argument("--relaunch", action="store_true", help="Reopen once to check saved preferences")
-    parser.add_argument("--automated", action="store_true", help="Run native UI assertions, restart restoration, and connection form checks without manual input")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--automated", action="store_true", help="Run native UI assertions, restart restoration, and connection form checks without manual input")
+    mode.add_argument("--record-demo", type=Path, metavar="DIRECTORY", help="Record a synthetic keyboard demo as GIF and MP4")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--size", type=int, nargs=2, metavar=("WIDTH", "HEIGHT"), help="Initial isolated window size")
     args = parser.parse_args()
@@ -36,15 +38,19 @@ def main():
     if not args.app.is_dir():
         parser.error("App bundle not found; run scripts/build-macos.sh first")
     test_binary = None
-    if args.automated:
+    scripted = args.automated or args.record_demo is not None
+    if scripted:
         project = Path(__file__).resolve().parents[1]
         subprocess.run(["cargo", "build", "--locked", "--release", "--features", "ui-tests"], cwd=project, check=True)
         artifacts = Path(os.environ.get("CARGO_TARGET_DIR", project / "target"))
         if not artifacts.is_absolute():
             artifacts = project / artifacts
         test_binary = artifacts / "release/still"
-        args.case = "unicode"
-        args.relaunch = True
+        if args.automated:
+            args.case = "unicode"
+            args.relaunch = True
+        else:
+            args.size = [1120, 760]
 
     albums = [dict(id=f"album-{i}", name=f"Album {i:03}", artist="Composers", year=2000 + i % 25, songCount=120) for i in range(401)]
     tracks = [dict(id=f"song-{i}", title=f"Track {i:03}", artist="Composer", album="Soundtrack", duration=30,
@@ -64,6 +70,11 @@ def main():
                              artist="Композитор саундтрека к замечательному фильму",
                              album="Музыка из фильма — полное собрание")
                 track["path"] = f"/music/{directories[i // 30]}/Очень длинное название композиции {i:03} 🎵.wav"
+    covers = {}
+    if args.record_demo is not None:
+        from demo_fixture import cover, library
+        albums, tracks = library()
+        covers = {album["id"]: cover(index) for index, album in enumerate(albums)}
     liked = {"song-2"}
     fail_more = True
     audio = io.BytesIO()
@@ -71,7 +82,7 @@ def main():
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(8000)
-        wav.writeframes(b"\0\0" * 8000 * 30)
+        wav.writeframes(b"\0\0" * 8000 * (180 if args.record_demo is not None else 30))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *unused):
@@ -87,7 +98,11 @@ def main():
             print(json.dumps(dict(method=method, id=item_id, offset=offset)), flush=True)
             body = {"status": "ok"}
             if method == "getArtists":
-                body["artists"] = {"index": [{"artist": [dict(id="composer", name="Composers", albumCount=401)]}]}
+                artists = [dict(id="composer", name="Composers", albumCount=401)]
+                if args.record_demo is not None:
+                    artists = [dict(id=f"artist-{index}", name=name, albumCount=sum(a["artist"] == name for a in albums))
+                               for index, name in enumerate(sorted({album["artist"] for album in albums}))]
+                body["artists"] = {"index": [{"artist": artists}]}
             elif method == "getArtist":
                 body["artist"] = {"album": albums}
             elif method == "getAlbumList2":
@@ -104,7 +119,8 @@ def main():
                     body["albumList2"] = {"album": ordered[offset:offset + 200]}
             elif method == "getAlbum":
                 album = next((album for album in albums if album["id"] == item_id), albums[0])
-                body["album"] = dict(album, song=tracks)
+                songs = [track for track in tracks if track["albumId"] == album["id"]] if args.record_demo is not None else tracks
+                body["album"] = dict(album, song=songs)
             elif method == "search3":
                 size = int(params.get("songCount", ["200"])[0])
                 body["searchResult3"] = {"song": tracks[offset:offset + size]}
@@ -114,7 +130,8 @@ def main():
                 liked.add(item_id)
             elif method == "unstar":
                 liked.discard(item_id)
-            payload = audio.getvalue() if method == "stream" else json.dumps({"subsonic-response": body}).encode()
+            payload = (audio.getvalue() if method == "stream" else covers.get(item_id, b"") if method == "getCoverArt"
+                       else json.dumps({"subsonic-response": body}).encode())
             total = len(payload)
             byte_range = self.headers.get("Range") if method == "stream" else None
             if byte_range:
@@ -128,7 +145,7 @@ def main():
                 self.send_response(200)
             if method == "stream":
                 self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Type", "audio/wav" if method == "stream" else "application/json")
+            self.send_header("Content-Type", "audio/wav" if method == "stream" else "image/png" if method == "getCoverArt" else "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -148,22 +165,31 @@ def main():
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         env = {key: value for key, value in os.environ.items() if not key.startswith("NAVIDROME_")}
-        for key in ("STILL_UI_TEST_SCRIPT", "STILL_UI_TEST_RESULT"):
+        for key in ("STILL_UI_TEST_SCRIPT", "STILL_UI_TEST_RESULT", "STILL_DEMO_CAPTURE"):
             env.pop(key, None)
         env.update(NAVIDROME_URL=f"http://127.0.0.1:{server.server_port}",
                    STILL_CONFIG_DIR=str(root / "config"), STILL_LOG_DIR=str(root / "logs"))
         if args.size:
             (root / "config").mkdir()
-            (root / "config/preferences.json").write_text(json.dumps(dict(window_size=args.size)))
+            preferences = dict(window_size=args.size)
+            if args.record_demo is not None:
+                preferences.update(sidebar_compact=False, last_section="albums")
+            (root / "config/preferences.json").write_text(json.dumps(preferences))
         if args.case != "connection":
             env.update(NAVIDROME_USERNAME="fixture", NAVIDROME_PASSWORD="fixture")
         try:
             launches = 3 if args.automated else (2 if args.relaunch else 1)
             for launch in range(launches):
-                if args.automated:
-                    from ui_scenarios import scenario
+                if scripted:
                     script = root / f"ui-script-{launch}.json"
-                    script.write_text(json.dumps(scenario(launch, tracks), ensure_ascii=False))
+                    if args.record_demo is not None:
+                        from demo_fixture import scenario
+                        steps = scenario()
+                        env["STILL_DEMO_CAPTURE"] = str(root)
+                    else:
+                        from ui_scenarios import scenario
+                        steps = scenario(launch, tracks)
+                    script.write_text(json.dumps(steps, ensure_ascii=False))
                     env.update(STILL_UI_TEST_SCRIPT=str(script), STILL_UI_TEST_RESULT=str(root / f"ui-result-{launch}.json"))
                     if launch == 2:
                         env.pop("NAVIDROME_USERNAME", None)
@@ -174,15 +200,19 @@ def main():
                                           config=str(root / "config/preferences.json"),
                                           log=str(root / "logs/still.log"))), flush=True)
                     try:
+                        if args.record_demo is not None:
+                            from demo_recording import capture
+                            capture(process, root, args.record_demo)
                         status = process.wait(timeout=args.timeout)
-                    except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                        process.terminate()
-                        process.wait(timeout=10)
+                    except BaseException:
+                        if process.poll() is None:
+                            process.terminate()
+                            process.wait(timeout=10)
                         raise
                 print(json.dumps(dict(exitCode=status)), flush=True)
                 if status != 0:
                     raise RuntimeError(f"App exited with status {status}")
-                if args.automated:
+                if scripted:
                     result = json.loads((root / f"ui-result-{launch}.json").read_text())
                     if not result["success"]:
                         raise RuntimeError(result["error"])
@@ -197,7 +227,7 @@ def main():
                 preferences = root / "config/preferences.json"
                 if preferences.exists():
                     print(json.dumps(dict(preferences=json.loads(preferences.read_text()))), flush=True)
-            if args.automated:
+            if scripted:
                 saved = Path(__file__).resolve().parents[1] / ".local/ui-test-results" / uuid.uuid4().hex
                 saved.mkdir(parents=True)
                 for result in root.glob("ui-*.json"):
@@ -208,6 +238,9 @@ def main():
             saved.mkdir(parents=True)
             if (root / "app.log").exists():
                 shutil.copy2(root / "app.log", saved / "app.log")
+            for name in ("capture.log", "capture.mov"):
+                if (root / name).exists():
+                    shutil.copy2(root / name, saved / name)
             if (root / "logs").exists():
                 shutil.copytree(root / "logs", saved / "logs")
             for result in root.glob("ui-*.json"):

@@ -1,0 +1,6 @@
+{
+  "description": "Visually reviewed recording of the isolated synthetic Still demo library. No real connection, music, desktop or audio is captured.",
+  "sha256": {
+    "docs/demo/still.mp4": "0e3ced8727867fc851168e46084a9e93d4950d7c2632e065fa5069c938c1f8c4"
+  }
+}

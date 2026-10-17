@@ -138,6 +138,12 @@ impl PlayerView {
                 .map(Navidrome::server_label)
                 .unwrap_or_default()
         };
+        #[cfg(feature = "ui-tests")]
+        let server_label = if std::env::var_os("STILL_DEMO_CAPTURE").is_some() {
+            "Demo library".to_owned()
+        } else {
+            server_label
+        };
         let disconnect_label = if self.connection.saved {
             "Disconnect & forget"
         } else {
