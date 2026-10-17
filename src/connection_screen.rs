@@ -144,15 +144,11 @@ impl PlayerView {
         self.pending_folder = None;
         self.browser.clear();
         self.reset_navigation_ui(cx);
-        self.generation += 1;
-        self.player.stop();
+        self.transport.disconnect();
         self.connection.disconnect();
         self.demo = false;
         self.error = None;
         self.likes = Likes::default();
-        self.queue.clear();
-        self.media.clear();
-        self.playback = Playback::default();
         self.password.update(cx, |field, cx| field.clear(cx));
         self.forget_connection(cx);
         window.focus(&self.password.focus_handle(cx));

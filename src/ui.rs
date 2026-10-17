@@ -12,9 +12,9 @@ use crate::{
         ALBUM_ROW_HEIGHT, ARTIST_ROW_HEIGHT, FOLDER_ROW_HEIGHT, PLAYER_HEIGHT,
         SIDEBAR_COMPACT_WIDTH, SIDEBAR_EXPANDED_WIDTH, SONG_ROW_HEIGHT, page_items,
     },
+    library_loader::{LibraryLoader, LoadContext, LoadOutcome},
     likes::Likes,
-    player::{Playback, PlaybackStatus, Player},
-    queue::PlayQueue,
+    playback_controller::PlaybackController,
     settings::{SavedFolder, Section, Settings},
     slider::{CommitMode, Slider, SliderEvent},
     theme::{
@@ -40,8 +40,12 @@ mod keyboard_help;
 mod ui_tests;
 #[cfg(feature = "ui-tests")]
 pub(crate) use ui_tests::start_ui_test;
+#[path = "library_view.rs"]
+mod library_view;
 #[path = "player_bar.rs"]
 mod player_bar;
+#[path = "sidebar.rs"]
+mod sidebar;
 
 // Single-line labels use truncate(), which also disables wrapping. In GPUI 0.2.2,
 // text_ellipsis() alone can reuse shortened text runs during wrapped layout and
@@ -133,6 +137,7 @@ fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
 pub struct PlayerView {
     connection: ConnectionState,
     browser: Browser,
+    library_loader: Entity<LibraryLoader>,
     server: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
@@ -150,12 +155,8 @@ pub struct PlayerView {
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
     likes: Likes,
-    media: crate::media::SystemMedia,
     error: Option<Failure>,
-    player: Player,
-    playback: Playback,
-    queue: PlayQueue,
-    generation: u64,
+    transport: PlaybackController,
     settings: Settings,
     pending_folder: Option<SavedFolder>,
     #[cfg(feature = "ui-tests")]
@@ -195,12 +196,19 @@ impl PlayerView {
             cx.new(|cx| TextInput::new("Find in this list", String::new(), false, cx).clearable());
         let seek_slider = cx.new(|_| Slider::new("seek", CommitMode::OnRelease));
         let volume_slider = cx.new(|_| Slider::new("volume-slider", CommitMode::Continuous));
+        let library_loader = cx.new(|_| LibraryLoader::default());
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe(&library_loader, |this, loader, _, cx| {
+            let outcome = loader.update(cx, |loader, _| loader.take_outcome());
+            if let Some(outcome) = outcome {
+                this.accept_library(outcome, cx);
+            }
+        }));
         subscriptions.push(cx.subscribe(&seek_slider, |this, _, event, cx| {
             if let SliderEvent::Change(ratio) = event
-                && let Some(song) = this.queue.current()
+                && let Some(song) = this.transport.queue().current()
             {
-                this.player
+                this.transport
                     .seek((song.duration as f32 * ratio).round() as u64);
             }
             cx.notify();
@@ -225,7 +233,7 @@ impl PlayerView {
             }
         }));
         subscriptions.push(cx.on_app_quit(|this, _| {
-            this.media.clear();
+            this.transport.clear_media();
             this.remember_folder();
             let pending = this.settings.flush();
             async move {
@@ -295,6 +303,7 @@ impl PlayerView {
         let mut view = Self {
             connection: ConnectionState::new(environment_connection),
             browser: Browser::default(),
+            library_loader,
             server,
             username,
             password,
@@ -316,12 +325,8 @@ impl PlayerView {
                 0.7
             },
             likes: Likes::default(),
-            media: crate::media::SystemMedia::new(),
             error: None,
-            player: Player::new(initial_volume),
-            playback: Playback::default(),
-            queue: PlayQueue::with_shuffle(initial_shuffle),
-            generation: 0,
+            transport: PlaybackController::new(initial_volume, initial_shuffle),
             settings,
             pending_folder: None,
             #[cfg(feature = "ui-tests")]
@@ -345,6 +350,7 @@ impl PlayerView {
     }
 
     fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
+        self.library_loader.update(cx, |loader, _| loader.cancel());
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
@@ -434,47 +440,53 @@ impl PlayerView {
         };
         let (request_id, cancellation) = self.browser.start_load();
         self.error = None;
-        let like_revision = self.likes.revision();
-        let playback_generation = self.generation;
-        let operation = request.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { operation.run(client, &cancellation) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.browser.finish_load(request_id) {
-                    return;
+        let context = LoadContext {
+            request_id,
+            request,
+            like_revision: self.likes.revision(),
+            playback_generation: self.transport.generation(),
+        };
+        self.library_loader.update(cx, |loader, cx| {
+            loader.start(client, context, cancellation, cx)
+        });
+        cx.notify();
+    }
+
+    fn accept_library(&mut self, outcome: LoadOutcome, cx: &mut Context<Self>) {
+        let LoadOutcome { context, result } = outcome;
+        let LoadContext {
+            request_id,
+            request,
+            like_revision,
+            playback_generation,
+        } = context;
+        if !self.browser.finish_load(request_id) {
+            return;
+        }
+        match result {
+            Ok(mut data) => {
+                if matches!(self.browser.state().page, Page::Liked)
+                    && let LibraryData::Songs(songs) = data
+                {
+                    data = LibraryData::Songs(self.likes.accept_server(songs, like_revision));
                 }
-                match result {
-                    Ok(mut data) => {
-                        if matches!(this.browser.state().page, Page::Liked)
-                            && let LibraryData::Songs(songs) = data
-                        {
-                            data =
-                                LibraryData::Songs(this.likes.accept_server(songs, like_revision));
-                        }
-                        this.browser.apply(data, request.offset > 0);
-                        if let Some(saved) = this.pending_folder.take() {
-                            this.browser.restore_folder(&saved);
-                            this.reset_navigation_ui(cx);
-                        }
-                        this.remember_folder();
-                    }
-                    Err(error) => {
-                        this.error = Some(Failure::new(
-                            format!("{error:#}"),
-                            RetryAction::Library(request),
-                        ))
-                    }
+                self.browser.apply(data, request.offset > 0);
+                if let Some(saved) = self.pending_folder.take() {
+                    self.browser.restore_folder(&saved);
+                    self.reset_navigation_ui(cx);
                 }
-                if this.generation == playback_generation || !this.follow_current_track() {
-                    this.reveal_cursor();
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+                self.remember_folder();
+            }
+            Err(error) => {
+                self.error = Some(Failure::new(
+                    format!("{error:#}"),
+                    RetryAction::Library(request),
+                ))
+            }
+        }
+        if self.transport.generation() == playback_generation || !self.follow_current_track() {
+            self.reveal_cursor();
+        }
         cx.notify();
     }
 
@@ -510,7 +522,7 @@ impl PlayerView {
         match action {
             RetryAction::Library(request) => self.load(request, cx),
             RetryAction::Playback(generation) => {
-                if self.generation == generation {
+                if self.transport.generation() == generation {
                     self.play_current(cx);
                 }
             }
@@ -530,17 +542,21 @@ impl PlayerView {
             cx.notify();
             return;
         }
-        if self.connection.client.is_none() || !self.queue.start(queue, index) {
-            return;
+        if let Some(client) = &self.connection.client
+            && self.transport.play(client, queue, index)
+        {
+            self.playback_changed(cx);
         }
-        self.play_current(cx);
     }
-
     fn play_current(&mut self, cx: &mut Context<Self>) {
+        if let Some(client) = &self.connection.client
+            && self.transport.restart(client)
+        {
+            self.playback_changed(cx);
+        }
+    }
+    fn playback_changed(&mut self, cx: &mut Context<Self>) {
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
-        let (Some(client), Some(song)) = (&self.connection.client, self.queue.current()) else {
-            return;
-        };
         if self
             .error
             .as_ref()
@@ -548,16 +564,7 @@ impl PlayerView {
         {
             self.error = None;
         }
-        self.generation += 1;
-        self.player
-            .play(self.generation, client.stream_url(&song.id));
-        self.playback = Playback {
-            generation: self.generation,
-            status: PlaybackStatus::Loading,
-            ..Playback::default()
-        };
         self.follow_current_track();
-        self.sync_media();
         cx.notify();
     }
 
@@ -565,7 +572,7 @@ impl PlayerView {
         if self.show_help || self.browser.is_loading() {
             return false;
         }
-        let Some(song) = self.queue.current() else {
+        let Some(song) = self.transport.queue().current() else {
             return false;
         };
         let entries = self.visible_entries();
@@ -724,126 +731,44 @@ impl PlayerView {
     }
 
     fn next(&mut self, cx: &mut Context<Self>) {
-        if self.queue.advance() {
-            self.play_current(cx);
+        if let Some(client) = &self.connection.client
+            && self.transport.next(client)
+        {
+            self.playback_changed(cx);
         }
     }
-
     fn previous(&mut self, cx: &mut Context<Self>) {
-        if self.playback.position.as_secs() > 3
-            && !self.playback.is_finished()
-            && self.playback.error().is_none()
+        if let Some(client) = &self.connection.client
+            && self.transport.previous(client)
         {
-            self.player.seek(0);
-        } else if self.queue.previous() {
-            self.play_current(cx);
-        } else if self.queue.current().is_some()
-            && (self.playback.is_finished() || self.playback.error().is_some())
-        {
-            self.queue.restart();
-            self.play_current(cx);
+            self.playback_changed(cx);
         }
     }
-
     fn tick(&mut self, cx: &mut Context<Self>) {
         if self.settings.poll() {
             cx.notify();
         }
-        for command in self.media.drain() {
-            self.media_command(command, cx);
+        let update = self.transport.poll(self.connection.client.as_ref());
+        if update.track_changed {
+            self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
+            self.follow_current_track();
         }
-        let snapshot = self.player.snapshot();
-        if snapshot.generation != self.generation {
-            return;
+        if let Some(failure) = update.failure {
+            self.error = Some(failure);
         }
-        if let Some(error) = snapshot.error()
-            && self.playback.error() != Some(error)
-        {
-            self.error = Some(Failure::new(error, RetryAction::Playback(self.generation)));
-        }
-        if snapshot.warning != self.playback.warning
-            && let Some((_, message)) = &snapshot.warning
-        {
-            self.error = Some(message.clone().into());
-        }
-        let finished_now = snapshot.is_finished() && !self.playback.is_finished();
-        let changed = self.playback.position.as_secs() != snapshot.position.as_secs()
-            || self.playback.status != snapshot.status
-            || self.playback.warning != snapshot.warning;
-        self.playback = snapshot;
-        if finished_now {
-            self.next(cx);
-        }
-        if changed {
-            self.sync_media();
+        if update.changed {
             cx.notify();
         }
     }
-
-    fn sync_media(&mut self) {
-        self.media.sync(self.queue.current(), &self.playback);
-    }
-
-    fn media_command(&mut self, command: crate::media::MediaCommand, cx: &mut Context<Self>) {
-        use crate::media::MediaCommand;
-        let Some(song) = self.queue.current() else {
-            return;
-        };
-        let duration = song.duration;
-        crate::diagnostics::event(&format!("System media command: {command:?}"));
-        match command {
-            MediaCommand::Play => {
-                if self.playback.needs_restart() {
-                    self.play_current(cx);
-                } else {
-                    self.player.set_paused(false);
-                }
-            }
-            MediaCommand::Pause => {
-                if !self.playback.needs_restart() {
-                    self.player.set_paused(true);
-                }
-            }
-            MediaCommand::Toggle => self.toggle(cx),
-            MediaCommand::Next => self.next(cx),
-            MediaCommand::Previous => self.previous(cx),
-            MediaCommand::Stop => {
-                self.generation += 1;
-                self.player.stop();
-                self.playback = Playback {
-                    generation: self.generation,
-                    ..Playback::default()
-                };
-                self.sync_media();
-                cx.notify();
-            }
-            MediaCommand::SeekTo { seconds } => {
-                if let Some(position) = crate::media::seek_position(seconds, duration) {
-                    self.player.seek(position);
-                }
-            }
-            MediaCommand::Skip { seconds } => {
-                if let Some(position) = crate::media::seek_position(
-                    self.playback.position.as_secs_f64() + seconds,
-                    duration,
-                ) {
-                    self.player.seek(position);
-                }
-            }
-        }
-    }
-
     fn toggle(&mut self, cx: &mut Context<Self>) {
-        if self.playback.needs_restart() {
-            self.play_current(cx);
-        } else if self.queue.current().is_some() {
-            self.player.toggle();
+        if let Some(client) = &self.connection.client
+            && self.transport.toggle(client)
+        {
+            self.playback_changed(cx);
         }
     }
-
     fn toggle_shuffle(&mut self, cx: &mut Context<Self>) {
-        self.queue.toggle_shuffle();
-        let shuffled = self.queue.is_shuffled();
+        let shuffled = self.transport.toggle_shuffle();
         self.settings.update(|value| value.shuffle = shuffled);
         cx.notify();
     }
@@ -855,7 +780,7 @@ impl PlayerView {
     fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
         self.settings
             .update(|value| value.volume = volume.clamp(0., 1.));
-        self.player.volume(self.settings.value().volume);
+        self.transport.volume(self.settings.value().volume);
         if self.settings.value().volume > 0. {
             self.unmuted_volume = self.settings.value().volume;
         }
@@ -1036,7 +961,7 @@ impl PlayerView {
                 window.focus(&self.library_focus);
             }
             Toggle => {
-                if self.queue.current().is_some() {
+                if self.transport.queue().current().is_some() {
                     self.toggle(cx);
                 } else if !self.show_help {
                     self.open_selected(cx);
@@ -1047,7 +972,7 @@ impl PlayerView {
             Previous => self.previous(cx),
             Like | LikeCurrent => {
                 let song = if command == LikeCurrent {
-                    self.queue.current().cloned()
+                    self.transport.queue().current().cloned()
                 } else {
                     self.visible_entries()
                         .get(self.browser.state().cursor)
@@ -1058,22 +983,7 @@ impl PlayerView {
                     self.toggle_like(song, cx);
                 }
             }
-            Seek(delta) => {
-                if let Some(song) = self.queue.current() {
-                    let duration = if song.duration > 0 {
-                        song.duration
-                    } else {
-                        u64::MAX
-                    };
-                    self.player.seek(
-                        self.playback
-                            .position
-                            .as_secs()
-                            .saturating_add_signed(delta)
-                            .min(duration),
-                    );
-                }
-            }
+            Seek(delta) => self.transport.seek_relative(delta),
             Volume(delta) => self.adjust_volume(delta, cx),
             Section(index) => self.switch_section(index, cx),
             Cycle(delta) => self.switch_section(
@@ -1102,813 +1012,6 @@ impl PlayerView {
         self.settings
             .update(|value| value.sidebar_compact = !value.sidebar_compact);
         cx.notify();
-    }
-
-    fn shortcut_badge(&self, _id: &'static str, label: impl Into<SharedString>) -> gpui::Div {
-        let label = label.into();
-        #[cfg(feature = "ui-tests")]
-        {
-            self.ui_probe
-                .borrow_mut()
-                .shortcut_hints
-                .insert(_id.into(), label.to_string());
-        }
-        div()
-            .w(px(32.))
-            .h(px(24.))
-            .flex_shrink_0()
-            .rounded_sm()
-            .bg(rgb(SELECTED))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_color(rgb(ACCENT))
-            .child(label)
-    }
-
-    fn sidebar_icon_slot(&self, _id: &'static str, content: impl IntoElement) -> gpui::Div {
-        // The same 40px column anchors every icon in both sidebar modes.
-        let slot = div()
-            .relative()
-            .w(px(40.))
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(content);
-        #[cfg(feature = "ui-tests")]
-        {
-            let probe = self.ui_probe.clone();
-            slot.on_children_prepainted(move |children, _, _| {
-                if let Some(bounds) = children.first() {
-                    probe.borrow_mut().sidebar_icons.insert(
-                        _id.into(),
-                        [
-                            f32::from(bounds.left() + bounds.size.width / 2.),
-                            f32::from(bounds.top() + bounds.size.height / 2.),
-                        ],
-                    );
-                }
-            })
-        }
-        #[cfg(not(feature = "ui-tests"))]
-        {
-            slot
-        }
-    }
-
-    fn sidebar_toggle(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let compact = self.settings.value().sidebar_compact;
-        let hints = window.is_window_active() && section_hints(window.modifiers());
-        div()
-            .id("toggle-sidebar")
-            .size(px(32.))
-            .flex_shrink_0()
-            .rounded_md()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|view| view.bg(rgb(HOVER)))
-            .child(if hints {
-                self.shortcut_badge("toggle-sidebar", "⌘B")
-                    .into_any_element()
-            } else {
-                icon(
-                    if compact {
-                        "sidebar-expand"
-                    } else {
-                        "sidebar-collapse"
-                    },
-                    MUTED,
-                )
-                .into_any_element()
-            })
-            .tooltip(move |_, cx| {
-                cx.new(|_| {
-                    Hint::new(if compact {
-                        "Expand sidebar · ⌘B"
-                    } else {
-                        "Collapse sidebar · ⌘B"
-                    })
-                })
-                .into()
-            })
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
-    }
-
-    fn sidebar_width(&self) -> f32 {
-        if self.settings.value().sidebar_compact {
-            SIDEBAR_COMPACT_WIDTH
-        } else {
-            SIDEBAR_EXPANDED_WIDTH
-        }
-    }
-
-    fn sidebar(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let compact = self.settings.value().sidebar_compact;
-        let width = self.sidebar_width();
-        let item_width = width - 24.;
-        #[cfg(feature = "ui-tests")]
-        {
-            self.ui_probe.borrow_mut().sidebar_width = width;
-        }
-        let selected = self.section_index();
-        let hints = window.is_window_active() && section_hints(window.modifiers());
-        let server_label = if self.demo {
-            "Demo · no playback".to_owned()
-        } else {
-            self.connection
-                .client
-                .as_ref()
-                .map(Navidrome::server_label)
-                .unwrap_or_default()
-        };
-        let disconnect_label = if self.connection.saved {
-            "Disconnect & forget"
-        } else {
-            "Disconnect"
-        };
-        div()
-            .w(px(width))
-            .flex_shrink_0()
-            .h_full()
-            .bg(rgb(PANEL))
-            .border_r_1()
-            .border_color(rgb(BORDER))
-            .flex()
-            .flex_col()
-            .items_start()
-            .pl(px(12.))
-            .py_4()
-            .gap_2()
-            .child(
-                div()
-                    .w(px(item_width))
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .mb_5()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        self.sidebar_icon_slot(
-                            "brand",
-                            div()
-                                .size(px(32.))
-                                .flex_shrink_0()
-                                .rounded_md()
-                                .bg(rgb(ACCENT))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(23.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(ON_ACCENT))
-                                .child("s"),
-                        ),
-                    )
-                    .when(!compact, |view| {
-                        view.child(
-                            div()
-                                .text_size(px(23.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Still"),
-                        )
-                    }),
-            )
-            .children(
-                [
-                    ("artists", "Artists", "Artists · ⌘1", Page::Artists),
-                    ("albums", "Albums", "Albums · ⌘2", Page::Albums),
-                    ("songs", "Songs", "Songs · ⌘3", Page::Songs),
-                    (
-                        "folders",
-                        "Folders",
-                        "Folders · ⌘4",
-                        Page::Folder(String::new()),
-                    ),
-                    ("heart", "Liked songs", "Liked songs · ⌘5", Page::Liked),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (glyph, label, hint, page))| {
-                    div()
-                        .id(index)
-                        .w(px(item_width))
-                        .h(px(40.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_color(rgb(if selected == index { ACCENT } else { MUTED }))
-                        .when(selected == index, |view| view.bg(rgb(SELECTED)))
-                        .hover(|view| view.bg(rgb(HOVER)))
-                        .child(self.sidebar_icon_slot(
-                            glyph,
-                            if hints {
-                                self.shortcut_badge(glyph, format!("⌘{}", index + 1))
-                                    .into_any_element()
-                            } else {
-                                icon(glyph, if selected == index { ACCENT } else { MUTED })
-                                    .into_any_element()
-                            },
-                        ))
-                        .when(!compact, |view| {
-                            view.child(div().flex_1().min_w_0().truncate().child(label))
-                        })
-                        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.browser.clear_history();
-                            this.open_section(page.section(), cx);
-                        }))
-                }),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .id("connection-status")
-                    .w(px(item_width))
-                    .h(px(24.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_color(rgb(MUTED))
-                    .text_xs()
-                    .child(self.sidebar_icon_slot(
-                        "connection-status",
-                        div().text_color(rgb(ACCENT)).child("●"),
-                    ))
-                    .when(!compact, |view| {
-                        view.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(server_label.clone()),
-                        )
-                    })
-                    .tooltip(move |_, cx| cx.new(|_| Hint::new(server_label.clone())).into()),
-            )
-            .child(
-                div()
-                    .id("keyboard-help")
-                    .w(px(item_width))
-                    .h(px(40.))
-                    .flex_shrink_0()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_color(rgb(MUTED))
-                    .cursor_pointer()
-                    .when(self.show_help, |view| view.bg(rgb(SELECTED)))
-                    .hover(|view| view.bg(rgb(HOVER)))
-                    .child(
-                        self.sidebar_icon_slot(
-                            "keyboard-help",
-                            div().text_size(px(20.)).child("?"),
-                        ),
-                    )
-                    .when(!compact, |view| {
-                        view.child(div().text_sm().child("Keyboard shortcuts"))
-                    })
-                    .tooltip(|_, cx| cx.new(|_| Hint::new("Keyboard shortcuts · ?")).into())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_help = !this.show_help;
-                        window.focus(&this.library_focus);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("disconnect")
-                    .w(px(item_width))
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_color(rgb(MUTED))
-                    .cursor_pointer()
-                    .hover(|view| view.bg(rgb(HOVER)))
-                    .child(self.sidebar_icon_slot("disconnect", icon("logout", MUTED)))
-                    .when(!compact, |view| {
-                        view.child(div().text_sm().child(disconnect_label))
-                    })
-                    .tooltip(move |_, cx| cx.new(|_| Hint::new(disconnect_label)).into())
-                    .on_click(cx.listener(|this, _, window, cx| this.disconnect(window, cx))),
-            )
-            .into_any_element()
-    }
-
-    fn header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut subtitle = match &self.browser.state().page {
-            Page::Artists => count_label(self.browser.state().artists.len(), "artist"),
-            Page::Albums => format!(
-                "{}{}",
-                count_label(self.browser.state().albums.len(), "album"),
-                if self.browser.state().more {
-                    " · more available"
-                } else {
-                    ""
-                }
-            ),
-            Page::Songs => format!(
-                "{}{}",
-                count_label(self.browser.state().songs.len(), "song"),
-                if self.browser.state().more {
-                    " · more available"
-                } else {
-                    ""
-                }
-            ),
-            Page::Artist(_) => count_label(self.browser.state().albums.len(), "album"),
-            Page::Liked => count_label(self.browser.state().songs.len(), "liked song"),
-            Page::Album(album) => format!(
-                "{}{} · {}",
-                album.artist,
-                album.year.map(|y| format!(" · {y}")).unwrap_or_default(),
-                count_label(
-                    album.song_count.max(self.browser.state().songs.len()),
-                    "song"
-                )
-            ),
-            Page::Folder(path) => self
-                .browser
-                .folder_library()
-                .and_then(|library| library.folder(path))
-                .map(|folder| {
-                    format!(
-                        "{} · {}",
-                        count_label(folder.children.len(), "folder"),
-                        count_label(folder.songs.len(), "song")
-                    )
-                })
-                .unwrap_or_default(),
-        };
-        if !self.browser.state().query.is_empty() {
-            let state = self.browser.state();
-            let (total, noun) = match &state.page {
-                Page::Artists => (state.artists.len(), "artists"),
-                Page::Albums | Page::Artist(_) => (state.albums.len(), "albums"),
-                Page::Folder(path) => (
-                    self.browser
-                        .folder_library()
-                        .and_then(|library| library.folder(path))
-                        .map_or(0, |folder| folder.children.len() + folder.songs.len()),
-                    "items",
-                ),
-                _ => (state.songs.len(), "songs"),
-            };
-            subtitle = format!(
-                "{} of {total} loaded {noun}{}",
-                self.visible_entries().len(),
-                if state.more { " · more available" } else { "" }
-            );
-        }
-        #[cfg(feature = "ui-tests")]
-        {
-            self.ui_probe.borrow_mut().find_summary = subtitle.clone();
-        }
-        let title = match &self.browser.state().page {
-            Page::Folder(path) if path.is_empty() => "Folders".to_owned(),
-            Page::Folder(path) => {
-                let parts: Vec<_> = path
-                    .rsplit('/')
-                    .filter(|part| !part.is_empty())
-                    .take(2)
-                    .collect();
-                format!(
-                    "Folders / {}",
-                    parts.into_iter().rev().collect::<Vec<_>>().join(" / ")
-                )
-            }
-            _ => self.title(),
-        };
-        div()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .px_4()
-            .py_3()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(self.sidebar_toggle(window, cx))
-                    .when(self.browser.has_history(), |view| {
-                        view.child(
-                            toolbar_icon("back", "back", "Go back · h")
-                                .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(19.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .truncate()
-                                    .child(title),
-                            )
-                            .child(div().text_xs().text_color(rgb(MUTED)).truncate().child(
-                                if self.browser.is_loading() {
-                                    "Loading…".into()
-                                } else {
-                                    subtitle
-                                },
-                            )),
-                    )
-                    .when(
-                        matches!(self.browser.state().page, Page::Folder(_))
-                            && !self.browser.is_loading(),
-                        |view| {
-                            view.child(
-                                toolbar_icon("refresh-folders", "refresh", "Refresh folders · r")
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.refresh_folders(cx)),
-                                    ),
-                            )
-                        },
-                    )
-                    .when(
-                        !self.browser.is_loading()
-                            && match &self.browser.state().page {
-                                Page::Folder(path) => self
-                                    .browser
-                                    .folder_library()
-                                    .and_then(|library| library.folder(path))
-                                    .is_some_and(|folder| {
-                                        !folder.songs.is_empty() || !folder.children.is_empty()
-                                    }),
-                                Page::Album(_) | Page::Liked => {
-                                    !self.browser.state().songs.is_empty()
-                                }
-                                _ => false,
-                            },
-                        |view| {
-                            view.child(
-                                toolbar_icon(
-                                    "play-page",
-                                    "play",
-                                    match self.browser.state().page {
-                                        Page::Folder(_) => {
-                                            "Play folder and subfolders · Shift+Enter"
-                                        }
-                                        Page::Liked => "Play liked songs",
-                                        _ => "Play album",
-                                    },
-                                )
-                                .bg(rgb(SELECTED))
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        if let Page::Folder(path) = &this.browser.state().page {
-                                            let path = path.clone();
-                                            this.play_folder(&path, cx);
-                                        } else {
-                                            this.play(this.browser.state().songs.clone(), 0, cx);
-                                        }
-                                    },
-                                )),
-                            )
-                        },
-                    )
-                    .child(
-                        div()
-                            .id("find-in-list")
-                            .w(px(220.))
-                            .flex_shrink_0()
-                            .tooltip(|_, cx| {
-                                cx.new(|_| Hint::new("Find in loaded items · / or ⌘F"))
-                                    .into()
-                            })
-                            .child(self.filter.clone()),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn artists_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let entries = self.visible_entries();
-        if entries.is_empty() {
-            return empty_state("No artists yet", &self.browser.state().query);
-        }
-        uniform_list(
-            ("artists", self.browser.request_id() as usize),
-            entries.len(),
-            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                range
-                    .map(|row| {
-                        let BrowserEntry::Artist(index) = &entries[row] else {
-                            unreachable!()
-                        };
-                        let artist = this.browser.state().artists[*index].clone();
-                        let initial = artist
-                            .name
-                            .chars()
-                            .next()
-                            .unwrap_or('♪')
-                            .to_uppercase()
-                            .to_string();
-                        div()
-                            .id(row)
-                            .w_full()
-                            .h(px(ARTIST_ROW_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .px_3()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(PANEL)))
-                            .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
-                                    .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
-                            })
-                            .child(
-                                div()
-                                    .size(px(34.))
-                                    .rounded_full()
-                                    .bg(rgb(SELECTED))
-                                    .text_color(rgb(ACCENT))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_lg()
-                                    .child(initial),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(artist.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child(count_label(artist.album_count, "album")),
-                            )
-                            .child(svg().path("forward").size(px(16.)).text_color(rgb(MUTED)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
-                                this.navigate(Page::Artist(artist.clone()), true, cx)
-                            }))
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(self.list_scroll.clone())
-        .w_full()
-        .flex_1()
-        .min_h_0()
-        .into_any_element()
-    }
-
-    fn albums_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let entries = self.visible_entries();
-        if entries.is_empty() {
-            return empty_state("No albums yet", &self.browser.state().query);
-        }
-        uniform_list(
-            ("albums", self.browser.request_id() as usize),
-            entries.len(),
-            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                range
-                    .map(|row| {
-                        let BrowserEntry::Album(index) = &entries[row] else {
-                            unreachable!()
-                        };
-                        let album = this.browser.state().albums[*index].clone();
-                        div()
-                            .id(row)
-                            .w_full()
-                            .h(px(ALBUM_ROW_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .px_3()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(PANEL)))
-                            .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
-                                    .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
-                            })
-                            .child(artwork(
-                                this.connection.client.as_ref(),
-                                album.cover_art.as_deref(),
-                                44.,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(div().truncate().child(album.name.clone()))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
-                                            .truncate()
-                                            .child(album.artist.clone()),
-                                    ),
-                            )
-                            .when_some(album.year, |view, year| {
-                                view.child(
-                                    div()
-                                        .w(px(48.))
-                                        .text_sm()
-                                        .text_color(rgb(MUTED))
-                                        .child(year.to_string()),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .w(px(86.))
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child(count_label(album.song_count, "song")),
-                            )
-                            .child(icon("forward", MUTED))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
-                                this.navigate(Page::Album(album.clone()), true, cx)
-                            }))
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(self.list_scroll.clone())
-        .w_full()
-        .flex_1()
-        .min_h_0()
-        .into_any_element()
-    }
-
-    fn songs_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let entries = self.visible_entries();
-        if entries.is_empty() {
-            return empty_state(
-                if matches!(self.browser.state().page, Page::Liked) {
-                    "Click ♡ next to a song to add it here"
-                } else {
-                    "No songs yet"
-                },
-                &self.browser.state().query,
-            );
-        }
-        let list = uniform_list(
-            ("songs", self.browser.request_id() as usize),
-            entries.len(),
-            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                range
-                    .map(|row| {
-                        let song = this.entry_song(&entries[row]).expect("song entry");
-                        let active = this
-                            .queue
-                            .current()
-                            .is_some_and(|current| current.id == song.id);
-                        track_row(row, SONG_ROW_HEIGHT)
-                            .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
-                                    .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
-                            })
-                            .child(
-                                div()
-                                    .w(px(24.))
-                                    .text_sm()
-                                    .text_color(rgb(if active { ACCENT } else { MUTED }))
-                                    .child(if active {
-                                        icon_sized(
-                                            if this.playback.is_playing() {
-                                                "play"
-                                            } else {
-                                                "pause"
-                                            },
-                                            ACCENT,
-                                            14.,
-                                        )
-                                        .into_any_element()
-                                    } else {
-                                        div().child(format!("{:02}", row + 1)).into_any_element()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_color(rgb(if active { ACCENT } else { TEXT }))
-                                            .font_weight(if active {
-                                                gpui::FontWeight::SEMIBOLD
-                                            } else {
-                                                gpui::FontWeight::NORMAL
-                                            })
-                                            .truncate()
-                                            .child(song.title.clone()),
-                                    )
-                                    .child(
-                                        div().flex().items_center().gap_2().child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_sm()
-                                                .text_color(rgb(MUTED))
-                                                .truncate()
-                                                .child(song.artist.clone()),
-                                        ),
-                                    ),
-                            )
-                            .when(
-                                matches!(this.browser.state().page, Page::Songs | Page::Liked),
-                                |view| {
-                                    view.child(
-                                        div()
-                                            .w(relative(0.3))
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
-                                            .truncate()
-                                            .child(song.album.clone()),
-                                    )
-                                },
-                            )
-                            .child(this.like_button(song, "song-like", cx))
-                            .child(
-                                div()
-                                    .w(px(60.))
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child(time_label(song.duration)),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
-                                this.play_row(row, cx)
-                            }))
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(self.list_scroll.clone())
-        .w_full()
-        .flex_1()
-        .min_h_0();
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .pl(px(20.))
-                    .pr_3()
-                    .pb_3()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(div().w(px(24.)).child("#"))
-                    .child(div().flex_1().child("Title"))
-                    .when(
-                        matches!(self.browser.state().page, Page::Songs | Page::Liked),
-                        |view| view.child(div().w(relative(0.3)).child("Album")),
-                    )
-                    .child(div().w(px(32.)))
-                    .child(div().w(px(60.)).child("Duration")),
-            )
-            .child(list)
-            .into_any_element()
     }
 
     fn load_demo_page(&mut self) {

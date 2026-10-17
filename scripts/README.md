@@ -1,4 +1,13 @@
-# Native macOS checks
+# Development checks
+
+Run `./scripts/check.sh` for the publication guard, Python syntax, formatting,
+Clippy and all unit tests. Rust is pinned by `rust-toolchain.toml`; builds use
+`Cargo.lock` with `--locked`. The GitHub Actions workflow runs the same checks.
+
+Unit tests include preferences write failure/recovery, a panicked audio-state
+publisher, canceled/stalled HTTP bodies and the complete audio preparation deadline.
+
+## Native macOS checks
 
 Build the binary, app bundle and architecture-specific ZIP with one command:
 
@@ -26,7 +35,7 @@ after a restart, fixed painted icon positions in both modes, switching sections,
 the exact folder/track/filter in a second process, and Cmd+Q from a password field
 in a third process. It also invokes the shared native command dispatchers for
 play/pause/toggle/stop/next/previous, checks repeated play/pause and resuming after
-stop, verifies arrow-key seeking in folders and songs (and text editing in the filter),
+stop, verifies recovery after the audio worker stops, arrow-key seeking in folders and songs (and text editing in the filter),
 checks playback shortcuts with keyboard help open without navigating the hidden library,
 and reads title, position and playback state back from MPNowPlayingInfoCenter.
 The Find count and the unchanged library columns behind the help panel are also checked.

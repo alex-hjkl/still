@@ -129,6 +129,8 @@ fall back to defaults with an explanation.
 
 Audio preparation has a 30-second deadline covering both opening and decoding.
 Switching or stopping a song cancels its transport and wakes a blocked decoder.
+If the audio worker stops unexpectedly, playback reports a recoverable error;
+retrying or pressing Play recreates the worker and keeps the queue and volume.
 
 The panic hook records a backtrace before native unwinding can abort. A log already
 at least 5 MiB is rotated on startup to `still.previous.log`. Packaging retains a

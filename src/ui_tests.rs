@@ -1,6 +1,7 @@
 //! Native UI regression driver, compiled only with --features ui-tests.
 //! Keystrokes use GPUI's dispatch path; assertions run after a rendered frame.
 use super::*;
+use crate::player::PlaybackStatus;
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -39,6 +40,7 @@ enum Step {
         command: crate::media::MediaCommand,
     },
     Disconnect,
+    StopAudioWorker,
     Expect {
         #[serde(flatten)]
         expected: Box<Expected>,
@@ -133,9 +135,9 @@ impl Snapshot {
             f32::from(size.contents.height) / view.browser.entries().len().max(1) as f32
         });
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
-        let (media_title, media_position, media_state) = view.media.test_snapshot();
+        let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         Self {
-            playback: match view.playback.status {
+            playback: match view.transport.state().status {
                 PlaybackStatus::Idle => "idle",
                 PlaybackStatus::Loading => "loading",
                 PlaybackStatus::Playing => "playing",
@@ -144,7 +146,7 @@ impl Snapshot {
                 PlaybackStatus::Failed(_) => "failed",
             }
             .into(),
-            position: view.playback.position.as_secs(),
+            position: view.transport.state().position.as_secs(),
             media_title,
             media_state,
             media_position,
@@ -152,7 +154,7 @@ impl Snapshot {
             loaded: state.loaded && !view.browser.is_loading(),
             show_help: view.show_help,
             volume: view.settings.value().volume,
-            shuffle: view.queue.is_shuffled(),
+            shuffle: view.transport.queue().is_shuffled(),
             page: page.into(),
             path: if let Page::Folder(path) = &state.page {
                 path.clone()
@@ -170,7 +172,8 @@ impl Snapshot {
             ],
             visible: row > 0. && top >= -1. && top + row <= height + 1.,
             current_track: view
-                .queue
+                .transport
+                .queue()
                 .current()
                 .map(|song| song.id.clone())
                 .unwrap_or_default(),
@@ -294,10 +297,11 @@ impl Run {
             }
             Step::Resize { size } => window.resize(gpui::size(px(size[0]), px(size[1]))),
             Step::Media { command } => {
-                if !self.view.read(cx).media.test_command(command) {
+                if !self.view.read(cx).transport.test_media_command(command) {
                     bail!("Native media command was not accepted: {command:?}");
                 }
             }
+            Step::StopAudioWorker => self.view.read(cx).transport.test_stop_worker(),
             Step::Disconnect => self.view.update(cx, |view, cx| view.disconnect(window, cx)),
             Step::Expect { expected } => {
                 let snapshot = Snapshot::read(self.view.read(cx), window, cx);

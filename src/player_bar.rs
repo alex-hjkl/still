@@ -2,19 +2,19 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn player_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let current = self.queue.current();
+        let current = self.transport.queue().current();
         let enabled = current.is_some();
         let duration = current.map_or(0, |song| song.duration);
         let position = self
             .seek_slider
             .read(cx)
             .preview()
-            .map_or(self.playback.position.as_secs(), |ratio| {
+            .map_or(self.transport.state().position.as_secs(), |ratio| {
                 (duration as f32 * ratio).round() as u64
             });
 
         let progress = if duration > 0 {
-            self.playback.position.as_secs_f32() / duration as f32
+            self.transport.state().position.as_secs_f32() / duration as f32
         } else {
             0.
         };
@@ -73,7 +73,7 @@ impl PlayerView {
                                     )
                                     .child(
                                         div().text_sm().text_color(rgb(MUTED)).truncate().child(
-                                            if self.playback.is_loading() {
+                                            if self.transport.state().is_loading() {
                                                 "Loading audio…".into()
                                             } else {
                                                 current.map_or(
@@ -103,18 +103,20 @@ impl PlayerView {
                                     .items_center()
                                     .justify_center()
                                     .cursor_pointer()
-                                    .when(self.queue.is_shuffled(), |view| view.bg(rgb(SELECTED)))
+                                    .when(self.transport.queue().is_shuffled(), |view| {
+                                        view.bg(rgb(SELECTED))
+                                    })
                                     .hover(|view| view.bg(rgb(HOVER)))
                                     .child(icon(
                                         "shuffle",
-                                        if self.queue.is_shuffled() {
+                                        if self.transport.queue().is_shuffled() {
                                             ACCENT
                                         } else {
                                             MUTED
                                         },
                                     ))
                                     .tooltip({
-                                        let shuffled = self.queue.is_shuffled();
+                                        let shuffled = self.transport.queue().is_shuffled();
                                         move |_, cx| {
                                             cx.new(|_| {
                                                 Hint::new(if shuffled {
@@ -155,7 +157,7 @@ impl PlayerView {
                                     .justify_center()
                                     .cursor_pointer()
                                     .child(icon_sized(
-                                        if self.playback.is_playing() {
+                                        if self.transport.state().is_playing() {
                                             "pause"
                                         } else {
                                             "play"
@@ -164,7 +166,7 @@ impl PlayerView {
                                         20.,
                                     ))
                                     .tooltip({
-                                        let playing = self.playback.is_playing();
+                                        let playing = self.transport.state().is_playing();
                                         move |_, cx| {
                                             cx.new(|_| {
                                                 Hint::new(if !enabled {

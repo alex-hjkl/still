@@ -189,7 +189,8 @@ impl PlayerView {
                                             .to_owned(),
                                         song.artist.clone(),
                                         false,
-                                        this.queue
+                                        this.transport
+                                            .queue()
                                             .current()
                                             .is_some_and(|current| current.id == song.id),
                                     )
@@ -219,7 +220,7 @@ impl PlayerView {
                                     if folder_entry {
                                         "folders"
                                     } else if active {
-                                        if this.playback.is_playing() {
+                                        if this.transport.state().is_playing() {
                                             "play"
                                         } else {
                                             "pause"

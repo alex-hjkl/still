@@ -2,7 +2,10 @@ use reqwest::Url;
 use rodio::{Decoder, DeviceSinkBuilder, Player as AudioPlayer, Source};
 use std::{
     io::BufReader,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 use stream_download::{
@@ -74,16 +77,16 @@ impl Playback {
 
 pub struct Player {
     commands: mpsc::Sender<Command>,
-    state: Arc<Mutex<Playback>>,
+    state: tokio::sync::watch::Receiver<Playback>,
+    requested_generation: AtomicU64,
 }
 
 impl Player {
     pub fn new(initial_volume: f32) -> Self {
         let (commands, receiver) = mpsc::channel();
-        let state = Arc::new(Mutex::new(Playback::default()));
-        let worker_state = state.clone();
+        let (worker_state, state) = tokio::sync::watch::channel(Playback::default());
         let feedback = commands.clone();
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("still-audio".into())
             .spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -93,8 +96,10 @@ impl Player {
                 {
                     Ok(runtime) => runtime,
                     Err(_) => {
-                        worker_state.lock().unwrap().status =
-                            PlaybackStatus::Failed("Could not start the audio worker".into());
+                        worker_state.send_modify(|state| {
+                            state.status =
+                                PlaybackStatus::Failed("Could not start the audio worker".into())
+                        });
                         return;
                     }
                 };
@@ -113,11 +118,11 @@ impl Player {
                             if let Some(previous) = sink.take() {
                                 previous.stop();
                             }
-                            *worker_state.lock().unwrap() = Playback {
+                            worker_state.send_replace(Playback {
                                 generation,
                                 status: PlaybackStatus::Loading,
                                 ..Playback::default()
-                            };
+                            });
                             let feedback = feedback.clone();
                             let cancel = CancellationToken::new();
                             let token = cancel.clone();
@@ -148,12 +153,13 @@ impl Player {
                                 sink = Some(next);
                                 Ok(())
                             });
-                            let mut state = worker_state.lock().unwrap();
-                            state.status = match result {
-                                Ok(()) if paused => PlaybackStatus::Paused,
-                                Ok(()) => PlaybackStatus::Playing,
-                                Err(error) => PlaybackStatus::Failed(error),
-                            };
+                            worker_state.send_modify(|state| {
+                                state.status = match result {
+                                    Ok(()) if paused => PlaybackStatus::Paused,
+                                    Ok(()) => PlaybackStatus::Playing,
+                                    Err(error) => PlaybackStatus::Failed(error),
+                                }
+                            });
                         }
                         Ok(Command::Prepared(_, _)) => {}
                         Ok(command @ (Command::Toggle | Command::SetPaused(_))) => {
@@ -174,7 +180,7 @@ impl Player {
                                 && let Err(error) = sink.try_seek(position)
                             {
                                 crate::diagnostics::event(&format!("Audio seek failed: {error}"));
-                                worker_state.lock().unwrap().seek_failed();
+                                worker_state.send_modify(Playback::seek_failed);
                             }
                         }
                         Ok(Command::Volume(value)) => {
@@ -190,21 +196,27 @@ impl Player {
                             if let Some(sink) = sink.take() {
                                 sink.stop();
                             }
-                            *worker_state.lock().unwrap() = Playback::default();
+                            worker_state.send_replace(Playback {
+                                generation,
+                                ..Playback::default()
+                            });
                         }
                         Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
                     if let Some(sink) = &sink {
-                        let mut state = worker_state.lock().unwrap();
-                        state.position = sink.get_pos();
-                        state.status = if sink.empty() {
+                        let position = sink.get_pos();
+                        let status = if sink.empty() {
                             PlaybackStatus::Finished
                         } else if sink.is_paused() {
                             PlaybackStatus::Paused
                         } else {
                             PlaybackStatus::Playing
                         };
+                        worker_state.send_modify(|state| {
+                            state.position = position;
+                            state.status = status;
+                        });
                     }
                 }
                 drop(preparation);
@@ -212,19 +224,29 @@ impl Player {
                     sink.stop();
                 }
                 runtime.shutdown_timeout(Duration::from_secs(1));
-            })
-            .expect("create audio worker");
-        Self { commands, state }
+            });
+        if let Err(error) = worker {
+            crate::diagnostics::event(&format!("Could not start audio worker: {error}"));
+        }
+        Self {
+            commands,
+            state,
+            requested_generation: AtomicU64::new(0),
+        }
     }
 
+    #[cfg(feature = "ui-tests")]
+    pub fn test_stop_worker(&self) {
+        let _ = self.commands.send(Command::Shutdown);
+    }
+
+    pub fn available(&self) -> bool {
+        self.state.has_changed().is_ok()
+    }
     pub fn play(&self, generation: u64, url: Url) {
-        if self.commands.send(Command::Play(generation, url)).is_err() {
-            *self.state.lock().unwrap() = Playback {
-                generation,
-                status: PlaybackStatus::Failed("The audio worker is unavailable".into()),
-                ..Playback::default()
-            };
-        }
+        self.requested_generation
+            .store(generation, Ordering::Relaxed);
+        let _ = self.commands.send(Command::Play(generation, url));
     }
     pub fn toggle(&self) {
         let _ = self.commands.send(Command::Toggle);
@@ -244,7 +266,16 @@ impl Player {
         let _ = self.commands.send(Command::Stop);
     }
     pub fn snapshot(&self) -> Playback {
-        self.state.lock().unwrap().clone()
+        let mut snapshot = self.state.borrow().clone();
+        if !self.available() {
+            snapshot.generation = self.requested_generation.load(Ordering::Relaxed);
+            if snapshot.error().is_none() {
+                snapshot.status = PlaybackStatus::Failed(
+                    "The audio worker stopped. Retry playback to restart it.".into(),
+                );
+            }
+        }
+        snapshot
     }
 }
 
@@ -410,15 +441,42 @@ mod tests {
     fn unavailable_worker_reports_a_failure_for_the_requested_track() {
         let (commands, receiver) = mpsc::channel();
         drop(receiver);
+        let (publisher, state) = tokio::sync::watch::channel(Playback::default());
+        drop(publisher);
         let player = Player {
             commands,
-            state: Arc::new(Mutex::new(Playback::default())),
+            state,
+            requested_generation: AtomicU64::new(0),
         };
         player.play(12, "http://localhost/stream".parse().unwrap());
         let playback = player.snapshot();
         assert_eq!(playback.generation, 12);
         assert!(!playback.is_loading());
         assert!(playback.needs_restart());
+    }
+
+    #[test]
+    fn a_panicked_worker_becomes_a_failed_snapshot_instead_of_a_ui_panic() {
+        let (commands, receiver) = mpsc::channel();
+        let (publisher, state) = tokio::sync::watch::channel(Playback::default());
+        let worker = std::thread::spawn(move || {
+            let _receiver = receiver;
+            let _publisher = publisher;
+            panic!("simulated audio worker failure");
+        });
+        assert!(worker.join().is_err());
+        let player = Player {
+            commands,
+            state,
+            requested_generation: AtomicU64::new(17),
+        };
+        player.toggle();
+        player.seek(10);
+        assert!(!player.available());
+        let snapshot = player.snapshot();
+        assert_eq!(snapshot.generation, 17);
+        assert!(snapshot.error().is_some());
+        assert!(snapshot.needs_restart());
     }
 
     fn stalled_audio_server() -> (
@@ -450,7 +508,15 @@ mod tests {
             // The server deliberately stalls. Cancel/timeout must close the body
             // instead of leaving a blocking decoder and downloader alive.
             let mut byte = [0];
-            assert_eq!(socket.read(&mut byte).unwrap(), 0);
+            match socket.read(&mut byte) {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                result => panic!("Canceled stream stayed open: {result:?}"),
+            }
         });
         (url, received, worker)
     }
