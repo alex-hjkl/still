@@ -2,7 +2,7 @@
 
 A keyboard-first Navidrome music player for macOS, built with Rust and GPUI.
 
-[Watch the demo (MP4)](docs/demo/still.mp4)
+https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
 
 ## Features
 
