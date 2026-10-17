@@ -2,7 +2,8 @@
 
 A keyboard-first Navidrome music player for macOS, built with Rust and GPUI.
 
-Keyboard controls are inspired by [Yazi](https://yazi-rs.github.io/),
+Navigation uses Vim-style motions (`h`, `j`, `k`, `l`), with keyboard controls inspired
+by [Yazi](https://yazi-rs.github.io/),
 [cmux](https://cmux.com/), [T3 Code](https://t3.codes/), and other keyboard-driven apps.
 
 https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
