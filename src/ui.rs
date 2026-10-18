@@ -1,6 +1,6 @@
 use crate::{
     api::{Album, Artist, Navidrome, Song, time_label},
-    artwork::artwork,
+    artwork::{app_icon, artwork},
     browser::{Browser, BrowserEntry, LibraryData, LibraryRequest, Page},
     connection::{Activity, ConnectionController, ConnectionEvent},
     credentials::Connection,
@@ -19,7 +19,7 @@ use crate::{
     slider::{CommitMode, Slider, SliderEvent},
     theme::{
         ACCENT, ACCENT_HOVER, ARTWORK_ICON, BG, BORDER, ERROR_BG, ERROR_TEXT, HOVER,
-        KEYBOARD_FOCUS, LIKED, LIKED_BG, MUTED, ON_ACCENT, PANEL, SELECTED, TEXT,
+        KEYBOARD_FOCUS, LIKED, MUTED, ON_ACCENT, PANEL, SELECTED, TEXT,
     },
 };
 use gpui::{
@@ -61,6 +61,18 @@ fn icon_sized(name: &'static str, color: u32, edge: f32) -> gpui::Svg {
 
 fn icon(name: &'static str, color: u32) -> gpui::Svg {
     icon_sized(name, color, 20.)
+}
+
+fn wordmark(size: f32) -> gpui::Div {
+    div()
+        .relative()
+        // Center the visible letters against the icon, rather than the font's
+        // line box, which reserves space below the baseline for descenders.
+        .top(px(size * 0.1))
+        .text_size(px(size))
+        .line_height(px(size))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .child("Still")
 }
 
 fn button(
@@ -156,6 +168,7 @@ pub struct PlayerView {
     focus_library: bool,
     keyboard_active: bool,
     keys: Keys,
+    connection_scroll: gpui::ScrollHandle,
     list_scroll: UniformListScrollHandle,
     folder_parent_scroll: UniformListScrollHandle,
     folder_preview_scroll: UniformListScrollHandle,
@@ -350,6 +363,7 @@ impl PlayerView {
             focus_library: demo,
             keyboard_active: false,
             keys: Keys::default(),
+            connection_scroll: gpui::ScrollHandle::new(),
             list_scroll: UniformListScrollHandle::new(),
             folder_parent_scroll: UniformListScrollHandle::new(),
             folder_preview_scroll: UniformListScrollHandle::new(),
@@ -861,10 +875,9 @@ impl PlayerView {
             .items_center()
             .justify_center()
             .rounded_full()
-            .when(liked, |view| view.bg(rgb(LIKED_BG)))
             .when(pending, |view| view.opacity(0.5))
             .when(!pending, |view| view.cursor_pointer())
-            .hover(|s| s.bg(rgb(LIKED_BG)))
+            .hover(|s| s.bg(rgb(HOVER)))
             .child(icon(
                 if liked { "heart-filled" } else { "heart" },
                 if liked { LIKED } else { MUTED },

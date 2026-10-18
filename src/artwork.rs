@@ -13,6 +13,50 @@ use std::{
 };
 
 struct Cover;
+
+pub fn app_icon(edge: f32) -> gpui::Img {
+    static ICONS: OnceLock<[Arc<RenderImage>; 2]> = OnceLock::new();
+    let images = ICONS.get_or_init(|| {
+        let mut source = image::load_from_memory(include_bytes!("../assets/app-icon/still.png"))
+            .expect("bundled application icon is a valid PNG")
+            .into_rgba32f();
+        // GPUI's image sampler has no mipmaps. Resample the large export at
+        // Retina size with premultiplied alpha to preserve its rounded edges.
+        for pixel in source.pixels_mut() {
+            let alpha = pixel.0[3];
+            for channel in &mut pixel.0[..3] {
+                *channel *= alpha;
+            }
+        }
+        [64, 96].map(|pixels| {
+            let mut data = image::imageops::resize(
+                &source,
+                pixels,
+                pixels,
+                image::imageops::FilterType::Lanczos3,
+            );
+            for pixel in data.pixels_mut() {
+                let alpha = pixel.0[3].clamp(0., 1.);
+                pixel.0[3] = alpha;
+                if alpha > 0. {
+                    for channel in &mut pixel.0[..3] {
+                        *channel = (*channel / alpha).clamp(0., 1.);
+                    }
+                }
+            }
+            let mut data = image::DynamicImage::ImageRgba32F(data).into_rgba8();
+            for pixel in data.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            Arc::new(RenderImage::new(vec![image::Frame::new(data)]))
+        })
+    });
+    img(images[usize::from(edge > 32.)].clone())
+        .size(px(edge))
+        .flex_shrink_0()
+        .object_fit(ObjectFit::Contain)
+}
+
 impl Asset for Cover {
     type Source = String;
     type Output = Result<Arc<RenderImage>, ImageCacheError>;
@@ -56,6 +100,7 @@ pub fn artwork(client: Option<&Navidrome>, id: Option<&str>, edge: f32) -> gpui:
     let placeholder = move || {
         div()
             .size(px(edge))
+            .flex_shrink_0()
             .rounded_md()
             .bg(rgb(ARTWORK_BG))
             .flex()
@@ -73,6 +118,7 @@ pub fn artwork(client: Option<&Navidrome>, id: Option<&str>, edge: f32) -> gpui:
         let url = client.cover_url(id);
         img(move |window: &mut Window, cx: &mut App| window.use_asset::<Cover>(&url, cx))
             .size(px(edge))
+            .flex_shrink_0()
             .rounded_md()
             .object_fit(ObjectFit::Cover)
             .with_loading(placeholder)

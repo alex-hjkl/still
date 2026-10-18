@@ -144,7 +144,10 @@ emoji, j/k/h/l, parent/current/preview column paths, visible selection, page mov
 780×640 and 1120×760 windows, filter entry, Cmd+B between compact and expanded sidebars while filtering, restoring the mode
 after a restart, fixed painted icon positions in both modes, switching sections, playback, restoring
 the exact folder/track/filter in a second process, and Cmd+Q from a password field
-in a third process. It also invokes the shared native command dispatchers for
+in a third process. The connection form is checked at 780×640 after a rejected
+login, including the painted bounds of its controls. A long malformed response
+also checks scrolling to the bottom and back to the fields.
+It also invokes the shared native command dispatchers for
 play/pause/toggle/stop/next/previous, checks repeated play/pause and resuming after
 stop, verifies recovery after the audio worker stops, arrow-key seeking in folders and songs (and text editing in the filter),
 three arrow keys in one frame and a batch of three native Skip commands,

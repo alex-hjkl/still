@@ -15,6 +15,7 @@ use std::{
 
 #[derive(Default, Clone, Serialize)]
 pub(super) struct RenderProbe {
+    pub connection_fits: Option<bool>,
     pub columns: BTreeMap<String, String>,
     pub failures: Vec<String>,
     pub find_summary: String,
@@ -48,6 +49,9 @@ enum Step {
     },
     Resize {
         size: [f32; 2],
+    },
+    ScrollConnection {
+        delta: f32,
     },
     Media {
         #[serde(flatten)]
@@ -119,6 +123,9 @@ pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Expected {
+    connection_fits: Option<bool>,
+    connection_scroll_y: Option<f32>,
+    connection_scrolled_to_bottom: Option<bool>,
     connected: Option<bool>,
     failures: Option<Vec<String>>,
     loaded: Option<bool>,
@@ -152,6 +159,8 @@ struct Expected {
 
 #[derive(Serialize)]
 struct Snapshot {
+    connection_scroll_max: f32,
+    connection_scroll_y: f32,
     connected: bool,
     loaded: bool,
     show_help: bool,
@@ -210,6 +219,8 @@ impl Snapshot {
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         Self {
+            connection_scroll_max: f32::from(view.connection_scroll.max_offset().height),
+            connection_scroll_y: f32::from(view.connection_scroll.offset().y),
             playback: match view.transport.state().status {
                 PlaybackStatus::Idle => "idle",
                 PlaybackStatus::Loading => "loading",
@@ -277,6 +288,17 @@ impl Snapshot {
             };
         }
         field!(connected)
+            && expected
+                .connection_fits
+                .is_none_or(|fits| self.rendered.connection_fits == Some(fits))
+            && expected
+                .connection_scroll_y
+                .is_none_or(|y| (self.connection_scroll_y - y).abs() < 0.1)
+            && expected.connection_scrolled_to_bottom.is_none_or(|bottom| {
+                bottom
+                    == (self.connection_scroll_max > 0.
+                        && (self.connection_scroll_y + self.connection_scroll_max).abs() < 0.1)
+            })
             && expected
                 .failures
                 .as_ref()
@@ -417,6 +439,12 @@ impl Run {
                 }
             }
             Step::Resize { size } => window.resize(gpui::size(px(size[0]), px(size[1]))),
+            Step::ScrollConnection { delta } => self.view.update(cx, |view, cx| {
+                let mut offset = view.connection_scroll.offset();
+                offset.y += px(*delta);
+                view.connection_scroll.set_offset(offset);
+                cx.notify();
+            }),
             Step::Media { command } => {
                 if !self.view.read(cx).transport.test_media_command(command) {
                     bail!("Native media command was not accepted: {command:?}");

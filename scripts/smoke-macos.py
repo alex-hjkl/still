@@ -100,7 +100,11 @@ def main():
             offset = int(params.get("offset", params.get("songOffset", ["0"]))[0])
             print(json.dumps(dict(method=method, id=item_id, offset=offset)), flush=True)
             body = {"status": "ok"}
-            if method == "getArtists":
+            if method == "ping" and params.get("u") == ["invalid"]:
+                body = {"status": "failed", "error": {"code": 40, "message": "Wrong username or password."}}
+            elif method == "ping" and params.get("u") == ["malformed"]:
+                body = {"status": "Unexpected response from the server. " * 40}
+            elif method == "getArtists":
                 artists = [dict(id="composer", name="Composers", albumCount=401)]
                 if args.record_demo is not None:
                     artists = [dict(id=f"artist-{index}", name=name, albumCount=sum(a["artist"] == name for a in albums))

@@ -15,6 +15,7 @@ Icons are embedded at compile time; no runtime download or icon font is used.
 | `play` | `assets/fill/play-fill.svg` |
 | `pause` | `assets/fill/pause-fill.svg` |
 | `heart` | `assets/regular/heart.svg` |
+| `check` | `assets/regular/check.svg` |
 | `heart-filled` | `assets/fill/heart-fill.svg` |
 | `shuffle` | `assets/regular/shuffle.svg` |
 | `previous` | `assets/fill/skip-back-fill.svg` |

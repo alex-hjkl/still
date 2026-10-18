@@ -172,31 +172,8 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        self.sidebar_icon_slot(
-                            "brand",
-                            div()
-                                .size(px(32.))
-                                .flex_shrink_0()
-                                .rounded_md()
-                                .bg(rgb(ACCENT))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(23.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(ON_ACCENT))
-                                .child("s"),
-                        ),
-                    )
-                    .when(!compact, |view| {
-                        view.child(
-                            div()
-                                .text_size(px(23.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Still"),
-                        )
-                    }),
+                    .child(self.sidebar_icon_slot("brand", app_icon(32.)))
+                    .when(!compact, |view| view.child(wordmark(23.))),
             )
             .children(
                 [

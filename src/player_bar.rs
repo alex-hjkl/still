@@ -258,6 +258,7 @@ impl PlayerView {
                         div()
                             .w(px(34.))
                             .text_xs()
+                            .text_right()
                             .text_color(rgb(MUTED))
                             .child(time_label(duration)),
                     ),

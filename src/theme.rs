@@ -10,7 +10,6 @@ pub const ACCENT_HOVER: u32 = 0x36502f;
 pub const SELECTED: u32 = 0xe3ecd9;
 pub const KEYBOARD_FOCUS: u32 = 0x5374a1;
 pub const LIKED: u32 = 0xb03958;
-pub const LIKED_BG: u32 = 0xf8e5eb;
 pub const HOVER: u32 = 0xe8ede3;
 pub const ARTWORK_BG: u32 = 0xe6ebdf;
 pub const ARTWORK_ICON: u32 = 0x73836a;

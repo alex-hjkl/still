@@ -8,22 +8,41 @@ enum Column {
     Preview,
 }
 
-fn column_header(label: &'static str, path: &str) -> gpui::Div {
+fn column_header(label: &'static str, path: Option<&str>) -> gpui::Div {
     div()
-        .h(px(46.))
+        .h(px(56.))
         .flex_shrink_0()
         .px_3()
         .flex()
         .flex_col()
         .justify_center()
+        .gap_1()
+        .bg(rgb(PANEL))
         .border_b_1()
         .border_color(rgb(BORDER))
-        .child(div().text_xs().text_color(rgb(MUTED)).child(label))
-        .child(div().truncate().child(if path.is_empty() {
-            "/".to_owned()
-        } else {
-            file_name(path).to_owned()
-        }))
+        .child(
+            div()
+                .when(path.is_some(), |view| view.text_xs().text_color(rgb(MUTED)))
+                .when(path.is_none(), |view| {
+                    view.text_sm().font_weight(gpui::FontWeight::MEDIUM)
+                })
+                .child(label),
+        )
+        .when_some(path, |view, path| {
+            view.child(
+                div()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .truncate()
+                    .child(
+                        if path.is_empty() {
+                            "/"
+                        } else {
+                            file_name(path)
+                        }
+                        .to_owned(),
+                    ),
+            )
+        })
 }
 
 fn column_message(message: &'static str) -> gpui::Div {
@@ -91,7 +110,15 @@ impl PlayerView {
                     .border_color(rgb(BORDER))
                     .children(parent)
                     .when(path.is_empty(), |view| {
-                        view.child(column_message("Library root"))
+                        view.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .child(column_header("Parent folder", None))
+                                .child(column_message("Library root")),
+                        )
                     }),
             )
             .child(
@@ -152,7 +179,7 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header(label, path));
+            .child(column_header(label, Some(path)));
         if entries.is_empty() {
             return pane
                 .child(column_message(
@@ -207,7 +234,7 @@ impl PlayerView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .px_2()
+                                .px_3()
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
                                 .cursor_pointer()
@@ -280,7 +307,7 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header("Song preview", &song.title))
+            .child(column_header("Song preview", None))
             .child(
                 div()
                     .id("folder-track-preview")
@@ -290,7 +317,8 @@ impl PlayerView {
                     .p_3()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .items_start()
+                    .gap_4()
                     .child(artwork(
                         self.connection.read(cx).client.as_ref(),
                         song.cover_art.as_deref(),
@@ -298,32 +326,55 @@ impl PlayerView {
                     ))
                     .child(
                         div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .whitespace_normal()
-                            .child(song.title.clone()),
+                            .w_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .whitespace_normal()
+                                    .child(song.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .whitespace_normal()
+                                    .child(song.artist.clone()),
+                            ),
                     )
-                    .children(
-                        [
-                            song.artist.clone(),
-                            song.album.clone(),
-                            time_label(song.duration),
-                        ]
-                        .into_iter()
-                        .map(|text| {
-                            div()
-                                .text_sm()
-                                .text_color(rgb(MUTED))
-                                .whitespace_normal()
-                                .child(text)
-                        }),
-                    )
-                    .child(self.like_button(song, "folder-preview-like", cx))
                     .child(
-                        button("folder-preview-play", "Play · Enter").on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.play_row(row, cx);
-                            },
-                        )),
+                        div()
+                            .w_full()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .whitespace_normal()
+                            .child(if song.album.is_empty() {
+                                time_label(song.duration)
+                            } else {
+                                format!("{} · {}", song.album, time_label(song.duration))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                button("folder-preview-play", "Play · Enter")
+                                    .bg(rgb(ACCENT))
+                                    .text_color(rgb(ON_ACCENT))
+                                    .hover(|view| view.bg(rgb(ACCENT_HOVER)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.play_row(row, cx);
+                                    })),
+                            )
+                            .child(self.like_button(song, "folder-preview-like", cx)),
                     ),
             )
             .into_any_element()

@@ -261,7 +261,7 @@ impl PlayerView {
                                     .text_color(rgb(MUTED))
                                     .child(count_label(artist.album_count, "album")),
                             )
-                            .child(svg().path("forward").size(px(16.)).text_color(rgb(MUTED)))
+                            .child(icon_sized("forward", MUTED, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);
                                 this.navigate(Page::Artist(artist.clone()), true, cx)
@@ -346,7 +346,7 @@ impl PlayerView {
                                     .text_color(rgb(MUTED))
                                     .child(count_label(album.song_count, "song")),
                             )
-                            .child(icon("forward", MUTED))
+                            .child(icon_sized("forward", MUTED, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);
                                 this.navigate(Page::Album(album.clone()), true, cx)
@@ -482,15 +482,21 @@ impl PlayerView {
             .min_h_0()
             .child(
                 div()
+                    .h(px(36.))
+                    .flex_shrink_0()
                     .flex()
+                    .items_center()
                     .gap_4()
-                    .pl(px(20.))
-                    .pr_3()
-                    .pb_3()
+                    .px_3()
+                    .mt_2()
+                    .mb_1()
+                    .rounded_md()
+                    .bg(rgb(PANEL))
                     .text_xs()
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(rgb(MUTED))
                     .child(div().w(px(24.)).child("#"))
-                    .child(div().flex_1().child("Title"))
+                    .child(div().flex_1().min_w_0().child("Title"))
                     .when(
                         matches!(self.browser.state().page, Page::Songs | Page::Liked),
                         |view| view.child(div().w(relative(0.3)).child("Album")),

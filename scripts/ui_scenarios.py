@@ -32,8 +32,17 @@ def scenario(launch, tracks):
                       selected=selected, visible=True, **values)
 
     if launch == 2:
-        return [expect(connected=False), key("tab"), expect(focus="username"),
+        return [dict(action="resize", size=[780, 640]),
+                expect(connected=False, connection_fits=True),
+                key("tab"), expect(focus="username"), dict(action="text", text="invalid"),
                 key("tab"), expect(focus="password"), dict(action="text", text="fixture"),
+                key("enter"), expect(connected=False, failures=["retry-connection"], connection_fits=True),
+                key("shift-tab"), key("cmd-a"), dict(action="text", text="malformed"), key("tab"),
+                key("enter"), expect(connected=False, failures=["retry-connection"], connection_fits=False),
+                dict(action="scroll_connection", delta=-10000),
+                expect(connection_scrolled_to_bottom=True),
+                dict(action="scroll_connection", delta=10000),
+                expect(connection_scroll_y=0),
                 dict(action="quit")]
 
     restored = folder(cd2, "song-35", filter="035", preview_song="song-35",
