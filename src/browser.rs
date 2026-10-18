@@ -211,9 +211,6 @@ impl Browser {
     pub fn request_id(&self) -> u64 {
         self.requests.id()
     }
-    pub fn is_current_request(&self, id: u64) -> bool {
-        self.requests.is_current(id)
-    }
     pub fn invalidate_requests(&mut self) {
         self.requests.invalidate();
         self.loading = false;

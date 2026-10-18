@@ -248,11 +248,11 @@ impl PlayerView {
                                         }),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.remember_folder();
+                                    this.remember_folder(cx);
                                     if this.browser.focus_folder_entry(&path, &selected_entry) {
                                         this.reset_navigation_ui(cx);
                                         this.open_selected(cx);
-                                        this.remember_folder();
+                                        this.remember_folder(cx);
                                     }
                                 }))
                         })
@@ -292,7 +292,7 @@ impl PlayerView {
                     .flex_col()
                     .gap_3()
                     .child(artwork(
-                        self.connection.client.as_ref(),
+                        self.connection.read(cx).client.as_ref(),
                         song.cover_art.as_deref(),
                         96.,
                     ))

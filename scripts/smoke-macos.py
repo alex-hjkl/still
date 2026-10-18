@@ -77,6 +77,8 @@ def main():
         covers = {album["id"]: cover(index) for index, album in enumerate(albums)}
     liked = {"song-2"}
     fail_more = True
+    fail_songs = args.automated
+    methods = []
     audio = io.BytesIO()
     with wave.open(audio, "wb") as wav:
         wav.setnchannels(1)
@@ -89,9 +91,10 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal fail_more
+            nonlocal fail_more, fail_songs
             url = urlsplit(self.path)
             method = url.path.rsplit("/", 1)[-1].removesuffix(".view")
+            methods.append(method)
             params = parse_qs(url.query)
             item_id = params.get("id", [""])[0]
             offset = int(params.get("offset", params.get("songOffset", ["0"]))[0])
@@ -123,7 +126,11 @@ def main():
                 body["album"] = dict(album, song=songs)
             elif method == "search3":
                 size = int(params.get("songCount", ["200"])[0])
-                body["searchResult3"] = {"song": tracks[offset:offset + size]}
+                if fail_songs and size == 200:
+                    fail_songs = False
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    body["searchResult3"] = {"song": tracks[offset:offset + size]}
             elif method == "getStarred2":
                 body["starred2"] = {"song": [dict(track, starred="2026-10-16T00:00:00Z") for track in tracks if track["id"] in liked]}
             elif method == "star":
@@ -180,6 +187,7 @@ def main():
         try:
             launches = 3 if args.automated else (2 if args.relaunch else 1)
             for launch in range(launches):
+                methods.clear()
                 if scripted:
                     script = root / f"ui-script-{launch}.json"
                     if args.record_demo is not None:
@@ -216,6 +224,9 @@ def main():
                     result = json.loads((root / f"ui-result-{launch}.json").read_text())
                     if not result["success"]:
                         raise RuntimeError(result["error"])
+                    if args.automated and launch == 1:
+                        if methods[:2] != ["ping", "search3"] or "getArtists" in methods:
+                            raise RuntimeError("Restoring Folders must not load Artists")
                     print(json.dumps(dict(uiAssertions="passed", steps=result["steps"], launch=launch + 1)), flush=True)
                 diagnostic_log = root / "logs/still.log"
                 if diagnostic_log.exists():

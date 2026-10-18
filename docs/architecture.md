@@ -14,7 +14,9 @@ where practical; views adapt user input and asynchronous results to those models
 - `library_loader.rs`: pending background library task, cooperative cancellation
   and completion events. The view reconciles results with current navigation.
 - `media.rs`, `media_macos.rs`: native media commands and Now Playing metadata.
-- `connection.rs`, `credentials.rs`: connection state and system credential storage.
+- `connection.rs`: connection controller owning authentication, credential persistence,
+  operation identities and connection failures. It emits connection events for the view.
+  `credentials.rs` adapts the system credential store.
 - `settings.rs`, `diagnostics.rs`: background preferences persistence and diagnostics.
 - `slider.rs`: reusable GPUI slider with pointer state and preview/change events.
 - `ui.rs`: application view, navigation and coordination of controllers.
@@ -23,9 +25,16 @@ where practical; views adapt user input and asynchronous results to those models
   screen rendering and view-specific interactions.
 - `keyboard.rs`, `input.rs`: contextual commands and native Unicode/IME text input.
 - `requests.rs`, `failure.rs`: stale-request cancellation and operation-specific Retry.
+  Library, playback and each song's like have independent failures. Navigation clears
+  only the library failure; connection failures belong to the connection controller.
 - `ui_tests.rs`: opt-in native regression driver and paced demo captions, excluded
   from normal releases. `scripts/demo_fixture.py` supplies synthetic demo records
   and original covers; `scripts/demo_recording.py` captures the isolated window.
+
+Authentication checks the server with `ping`; the view then loads the saved section
+through the normal library loader. An unrelated Artists failure cannot prevent login.
+Credential persistence failures keep their retry payload until success, dismissal or
+disconnect, independently of library navigation and playback failures.
 
 API requests and image loading run on GPUI's background executor. Audio uses a
 separate command worker and a Tokio runtime; blocking decoder work stays off the

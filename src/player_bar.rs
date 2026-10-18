@@ -49,7 +49,7 @@ impl PlayerView {
                             .gap_3()
                             .min_w_0()
                             .child(artwork(
-                                self.connection.client.as_ref(),
+                                self.connection.read(cx).client.as_ref(),
                                 current.and_then(|song| song.cover_art.as_deref()),
                                 40.,
                             ))

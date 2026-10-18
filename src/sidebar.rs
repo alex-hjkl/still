@@ -133,6 +133,7 @@ impl PlayerView {
             "Demo · no playback".to_owned()
         } else {
             self.connection
+                .read(cx)
                 .client
                 .as_ref()
                 .map(Navidrome::server_label)
@@ -144,7 +145,7 @@ impl PlayerView {
         } else {
             server_label
         };
-        let disconnect_label = if self.connection.saved {
+        let disconnect_label = if self.connection.read(cx).saved {
             "Disconnect & forget"
         } else {
             "Disconnect"

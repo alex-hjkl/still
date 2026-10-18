@@ -310,7 +310,7 @@ impl PlayerView {
                                     .border_color(rgb(KEYBOARD_FOCUS))
                             })
                             .child(artwork(
-                                this.connection.client.as_ref(),
+                                this.connection.read(cx).client.as_ref(),
                                 album.cover_art.as_deref(),
                                 44.,
                             ))

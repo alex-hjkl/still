@@ -16,6 +16,7 @@ use std::{
 #[derive(Default, Clone, Serialize)]
 pub(super) struct RenderProbe {
     pub columns: BTreeMap<String, String>,
+    pub failures: Vec<String>,
     pub find_summary: String,
     pub preview_song: Option<String>,
     pub sidebar_width: f32,
@@ -57,6 +58,11 @@ enum Step {
     },
     Disconnect,
     StopAudioWorker,
+    FailConnectionSave,
+    CredentialStoreAvailable,
+    Retry {
+        operation: String,
+    },
     Expect {
         #[serde(flatten)]
         expected: Box<Expected>,
@@ -114,6 +120,7 @@ pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
 #[derive(Default, Deserialize, Serialize)]
 struct Expected {
     connected: Option<bool>,
+    failures: Option<Vec<String>>,
     loaded: Option<bool>,
     show_help: Option<bool>,
     find_summary: Option<String>,
@@ -216,7 +223,7 @@ impl Snapshot {
             media_title,
             media_state,
             media_position,
-            connected: view.connection.client.is_some() || view.demo,
+            connected: view.connection.read(cx).client.is_some() || view.demo,
             loaded: state.loaded && !view.browser.is_loading(),
             show_help: view.show_help,
             volume: view.settings.value().volume,
@@ -270,6 +277,10 @@ impl Snapshot {
             };
         }
         field!(connected)
+            && expected
+                .failures
+                .as_ref()
+                .is_none_or(|failures| &self.rendered.failures == failures)
             && field!(loaded)
             && field!(show_help)
             && expected
@@ -419,6 +430,27 @@ impl Run {
                 }
             }
             Step::StopAudioWorker => self.view.read(cx).transport.test_stop_worker(),
+            Step::FailConnectionSave => self
+                .view
+                .read(cx)
+                .connection
+                .clone()
+                .update(cx, |connection, cx| connection.test_save_failure(cx)),
+            Step::CredentialStoreAvailable => self
+                .view
+                .read(cx)
+                .connection
+                .clone()
+                .update(cx, |connection, _| connection.test_store_available()),
+            Step::Retry { operation } => {
+                let target = match operation.as_str() {
+                    "connection" => FailureTarget::Connection,
+                    "library" => FailureTarget::Operation(Operation::Library),
+                    "playback" => FailureTarget::Operation(Operation::Playback),
+                    _ => bail!("Unknown retry operation"),
+                };
+                self.view.update(cx, |view, cx| view.retry(target, cx));
+            }
             Step::Disconnect => self.view.update(cx, |view, cx| view.disconnect(window, cx)),
             Step::Expect { expected } => {
                 let snapshot = Snapshot::read(self.view.read(cx), window, cx);
