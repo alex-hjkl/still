@@ -85,7 +85,9 @@ def main():
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     checksum = digest.hexdigest()
-    archive.with_name(archive.name + ".sha256").write_text(f"{checksum}  {archive.name}\n", encoding="utf-8")
+    archive.with_name(archive.name + ".sha256").write_bytes(
+        f"{checksum}  {archive.name}\n".encode("utf-8")
+    )
     print(f"Built {archive}")
 
 
