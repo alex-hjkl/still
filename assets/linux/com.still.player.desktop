@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Still
+Comment=A quiet Navidrome music player
+Exec=still
+Icon=com.still.player
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=com.still.player

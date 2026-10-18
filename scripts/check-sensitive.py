@@ -13,6 +13,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_MEDIA = {"docs/demo/still.mp4"}
+APP_ICONS = {
+    "assets/app-icon/still.png",
+    "assets/app-icon/still.icns",
+    "assets/app-icon/still.ico",
+}
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "access token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16})\b"),
@@ -27,6 +32,8 @@ def main():
     findings = []
     manifest = ROOT / "docs/demo/manifest.json"
     reviewed = json.loads(manifest.read_text())["sha256"] if manifest.exists() else {}
+    icon_manifest = ROOT / "assets/app-icon/manifest.json"
+    reviewed_icons = json.loads(icon_manifest.read_text())["sha256"] if icon_manifest.exists() else {}
     paths = sorted(set(result.stdout.decode().split("\0")) - {""})
     for name in paths:
         path = ROOT / name
@@ -38,11 +45,16 @@ def main():
             if hashlib.sha256(path.read_bytes()).hexdigest() != reviewed.get(name):
                 findings.append((name, 0, "demo media needs visual review and an updated hash"))
             continue
+        # Only these exact, visually reviewed app-icon exports are accepted.
+        if name in APP_ICONS:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != reviewed_icons.get(name):
+                findings.append((name, 0, "app icon needs visual review and an updated hash"))
+            continue
         if path.name.startswith(".env") or path.suffix in {".pem", ".key", ".p12", ".pfx"}:
             findings.append((name, 0, "credential file"))
             continue
         try:
-            content = path.read_text()
+            content = path.read_text(encoding="utf-8")
         except UnicodeError:
             findings.append((name, 0, "binary file needs manual privacy review"))
             continue

@@ -1,18 +1,98 @@
-name: Check
+name: CI
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 jobs:
-  check:
-    runs-on: macos-15
-    timeout-minutes: 30
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-arm64
+            os: macos-15
+          - name: macOS-x86_64
+            os: macos-15-intel
+          - name: Linux-x86_64
+            os: ubuntu-22.04
+          - name: Windows-x86_64
+            os: windows-2022
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/install-linux-deps.sh
+      - name: Locate the Windows shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows.ps1
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
+      - name: Cache Rust dependencies and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ matrix.name }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            rust-${{ matrix.name }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
       - name: Check source, style and tests
-        run: ./scripts/check.sh
+        run: python scripts/check.py
+      - name: Build release packages
+        run: python scripts/build-release.py
+      - name: Upload release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Still-${{ matrix.name }}
+          path: target/packages/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: Still-*
+          merge-multiple: true
+          path: packages
+      - name: Verify package checksums
+        working-directory: packages
+        run: sha256sum --check *.sha256
+      - name: Create or update a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json 2> release-error.log; then
+            python -c 'import json; assert json.load(open("release.json"))["isDraft"], "Refusing to replace a published release"'
+            gh release upload "$RELEASE_TAG" packages/* --clobber
+          else
+            gh release create "$RELEASE_TAG" packages/* --verify-tag --draft \
+              --title "Still $RELEASE_TAG" --generate-notes
+          fi

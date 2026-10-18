@@ -5469,6 +5469,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "embed-resource",
  "gpui",
  "image",
  "libc",

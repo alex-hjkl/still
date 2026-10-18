@@ -38,10 +38,12 @@ version = re.search(r'^version\s*=\s*"([^"]+)"', Path("Cargo.toml").read_text(),
 info = dict(CFBundleDisplayName="Still", CFBundleName="Still", CFBundleExecutable="still",
             CFBundleIdentifier="com.still.player", CFBundlePackageType="APPL",
             CFBundleShortVersionString=version, CFBundleVersion="1",
-            CFBundleDevelopmentRegion="en", NSHighResolutionCapable=True)
+            CFBundleDevelopmentRegion="en", NSHighResolutionCapable=True,
+            CFBundleIconFile="Still.icns")
 (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
 licenses = bundle / "Contents/Resources/licenses"
 shutil.copytree("licenses", licenses)
+shutil.copy2("assets/app-icon/still.icns", bundle / "Contents/Resources/Still.icns")
 PY
 
 codesign --force --sign - "$staging_dir/Still.app"

@@ -138,6 +138,9 @@ struct Expected {
     media_state: Option<String>,
     position_min: Option<u64>,
     position_max: Option<u64>,
+    // Audio position only, including platforms without native Now Playing.
+    audio_position_min: Option<u64>,
+    audio_position_max: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -306,6 +309,12 @@ impl Snapshot {
             && expected
                 .position_max
                 .is_none_or(|max| self.position <= max && self.media_position <= max)
+            && expected
+                .audio_position_min
+                .is_none_or(|min| self.position >= min)
+            && expected
+                .audio_position_max
+                .is_none_or(|max| self.position <= max)
             && expected
                 .columns
                 .as_ref()

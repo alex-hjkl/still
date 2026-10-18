@@ -1,6 +1,10 @@
 # Still
 
-A keyboard-first Navidrome music player for macOS, built with Rust and GPUI.
+A keyboard-first Navidrome music player built with Rust and GPUI.
+
+macOS is the primary platform. CI builds macOS (Apple Silicon and Intel), Linux
+(x86_64), and Windows (x86_64). Linux and Windows do not yet integrate with system
+media keys / Now Playing. Windows runtime validation is pending.
 
 Navigation uses Vim-style motions (`h`, `j`, `k`, `l`), with keyboard controls inspired
 by [Yazi](https://yazi-rs.github.io/),
@@ -18,14 +22,20 @@ https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
 
 ## Run
 
-Install [Rust](https://rustup.rs/) and the Xcode command-line tools, then run:
+Install [Rust](https://rustup.rs/). On macOS, install Xcode including its Metal
+tools. On Ubuntu / Debian, install build dependencies with
+`bash scripts/install-linux-deps.sh`. On Windows, install the Visual Studio C++
+Build Tools, Windows SDK and CMake, then run `scripts/setup-windows.ps1` in
+PowerShell (dot-source it for a local build: `. ./scripts/setup-windows.ps1`).
+Then run:
 
 ```sh
 cargo run --locked --release
 ```
 
 Enter your Navidrome URL, username and password. **Remember connection** saves the
-connection in macOS Keychain; **Disconnect & forget** removes it.
+connection in the platform credential store (macOS Keychain, Windows Credential
+Manager, or a Linux Secret Service provider); **Disconnect & forget** removes it.
 
 To preview the interface without a server or audio playback:
 
@@ -41,6 +51,31 @@ cargo run --locked --release -- --demo
 
 The app and architecture-specific ZIP are written to `target/release/`.
 Builds are ad hoc signed and not notarized.
+
+## CI and release packages
+
+GitHub Actions checks the source and builds optimized packages for all four
+OS/architecture combinations on pushes, pull requests and manual CI runs.
+Download them from the run's **Artifacts**: macOS `.app.zip`, Linux `.tar.gz`,
+or Windows portable `.zip`, with a SHA-256 checksum for each archive.
+
+To build the current platform locally:
+
+```sh
+python3 scripts/build-release.py
+```
+
+Packages are written to `target/packages/`. A tag matching `v<version>` in
+`Cargo.toml` also creates a **draft** GitHub Release after every build passes.
+Publishing that draft is a separate manual action. No signing certificates or
+personal access token are needed for these initial builds. See
+[CI setup and Linux runtime checks](scripts/README.md#ci-and-release-builds).
+
+The Linux CI package is built on Ubuntu 22.04 (glibc 2.35). Run it in a Wayland
+or X11 desktop with Vulkan drivers and the runtime libraries described in its
+`RUNNING.txt`. Windows packages are unsigned; macOS packages use ad hoc signing.
+To add the Linux app and its icon to your application menu, run
+`python3 install-desktop.py` from the extracted package and keep that folder in place.
 
 ## Keyboard controls
 
@@ -72,6 +107,10 @@ playlist management, repeat mode or persistent playback queue.
 
 - Preferences: `~/Library/Application Support/Still/preferences.json`
 - Diagnostic log: `~/Library/Logs/Still/still.log`
+
+On Linux, preferences use `$XDG_CONFIG_HOME/still` (default `~/.config/still`)
+and logs use `$XDG_STATE_HOME/still/logs` (default `~/.local/state/still/logs`).
+On Windows, they use `%APPDATA%\Still` and `%LOCALAPPDATA%\Still\logs` respectively.
 
 Volume, shuffle, sidebar mode, window size, last section and folder selection are
 restored between sessions. Connection credentials are stored separately in Keychain.
