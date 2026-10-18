@@ -112,7 +112,9 @@ mod tests {
     #[test]
     fn log_rotation_keeps_the_previous_session() {
         let directory = temp_directory();
-        let mut file = open_log(&directory).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        // Windows cannot resize a file opened only for appending by open_log.
+        let mut file = File::create(directory.join("still.log")).unwrap();
         file.write_all(b"old session").unwrap();
         file.set_len(MAX_LOG_BYTES).unwrap();
         drop(file);
