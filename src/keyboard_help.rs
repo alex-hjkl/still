@@ -75,7 +75,7 @@ impl PlayerView {
                     ("j / k", "Next / previous item"),
                     ("h / l", "Back / open or play"),
                     ("Enter", "Open or play selected item"),
-                    ("Shift+Enter", "Play folder and subfolders"),
+                    ("Shift+Enter", "Play selected folder, artist or album"),
                     ("Backspace", "Go back"),
                     ("gg / G", "First / last item"),
                     ("Ctrl+D / U", "Half a page down / up"),

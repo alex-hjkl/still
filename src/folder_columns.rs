@@ -8,41 +8,30 @@ enum Column {
     Preview,
 }
 
-fn column_header(label: &'static str, path: Option<&str>) -> gpui::Div {
+fn column_header(path: &str) -> gpui::Div {
     div()
-        .h(px(56.))
+        .h(px(40.))
         .flex_shrink_0()
         .px_3()
         .flex()
-        .flex_col()
-        .justify_center()
-        .gap_1()
+        .items_center()
         .bg(rgb(PANEL))
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(
             div()
-                .when(path.is_some(), |view| view.text_xs().text_color(rgb(MUTED)))
-                .when(path.is_none(), |view| {
-                    view.text_sm().font_weight(gpui::FontWeight::MEDIUM)
-                })
-                .child(label),
+                .min_w_0()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .truncate()
+                .child(
+                    if path.is_empty() {
+                        "/"
+                    } else {
+                        file_name(path)
+                    }
+                    .to_owned(),
+                ),
         )
-        .when_some(path, |view, path| {
-            view.child(
-                div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .truncate()
-                    .child(
-                        if path.is_empty() {
-                            "/"
-                        } else {
-                            file_name(path)
-                        }
-                        .to_owned(),
-                    ),
-            )
-        })
 }
 
 fn column_message(message: &'static str) -> gpui::Div {
@@ -116,7 +105,6 @@ impl PlayerView {
                                 .h_full()
                                 .flex()
                                 .flex_col()
-                                .child(column_header("Parent folder", None))
                                 .child(column_message("Library root")),
                         )
                     }),
@@ -158,11 +146,6 @@ impl PlayerView {
             Column::Current => self.list_scroll.clone(),
             Column::Preview => self.folder_preview_scroll.clone(),
         };
-        let label = match column {
-            Column::Parent => "Parent folder",
-            Column::Current => "Current folder",
-            Column::Preview => "Folder preview",
-        };
         #[cfg(feature = "ui-tests")]
         self.ui_probe.borrow_mut().columns.insert(
             match column {
@@ -179,7 +162,7 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header(label, Some(path)));
+            .child(column_header(path));
         if entries.is_empty() {
             return pane
                 .child(column_message(
@@ -274,6 +257,26 @@ impl PlayerView {
                                             )
                                         }),
                                 )
+                                .when(folder_entry && column == Column::Current, |view| {
+                                    let BrowserEntry::Folder(child) = &selected_entry else {
+                                        unreachable!();
+                                    };
+                                    let child = child.clone();
+                                    view.child(
+                                        row_play_button(
+                                            format!("play-folder-{child}").into(),
+                                            "Play folder and subfolders · Shift+Enter",
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                window.focus(&this.library_focus);
+                                                this.browser.set_cursor(row);
+                                                this.play_folder(&child, cx);
+                                            }),
+                                        ),
+                                    )
+                                })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.remember_folder(cx);
                                     if this.browser.focus_folder_entry(&path, &selected_entry) {
@@ -307,7 +310,6 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header("Song preview", None))
             .child(
                 div()
                     .id("folder-track-preview")

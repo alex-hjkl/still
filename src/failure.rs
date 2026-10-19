@@ -1,8 +1,9 @@
-use crate::{api::Song, browser::LibraryRequest, diagnostics};
+use crate::{api::Song, browser::LibraryRequest, collection::Collection, diagnostics};
 
 #[derive(Clone)]
 pub enum RetryAction {
     Library(LibraryRequest),
+    Collection(Collection),
     Playback(u64),
     Like { song: Song, liked: bool },
 }
@@ -43,6 +44,7 @@ impl<R> From<&str> for Failure<R> {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Operation {
     Library,
+    Collection,
     Playback,
     Like(String),
 }

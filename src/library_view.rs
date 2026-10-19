@@ -150,6 +150,7 @@ impl PlayerView {
                                     .is_some_and(|folder| {
                                         !folder.songs.is_empty() || !folder.children.is_empty()
                                     }),
+                                Page::Artist(_) => !self.browser.state().albums.is_empty(),
                                 Page::Album(_) | Page::Liked => {
                                     !self.browser.state().songs.is_empty()
                                 }
@@ -161,22 +162,21 @@ impl PlayerView {
                                     "play-page",
                                     "play",
                                     match self.browser.state().page {
-                                        Page::Folder(_) => {
-                                            "Play folder and subfolders · Shift+Enter"
-                                        }
-                                        Page::Liked => "Play liked songs",
-                                        _ => "Play album",
+                                        Page::Folder(_) => "Play this folder and subfolders",
+                                        Page::Liked => "Play liked songs · Shift+Enter",
+                                        Page::Artist(_) => "Play all by this artist",
+                                        _ => "Play album · Shift+Enter",
                                     },
                                 )
                                 .bg(rgb(SELECTED))
                                 .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        if let Page::Folder(path) = &this.browser.state().page {
-                                            let path = path.clone();
-                                            this.play_folder(&path, cx);
-                                        } else {
-                                            this.play(this.browser.state().songs.clone(), 0, cx);
-                                        }
+                                    |this, _, _, cx| match &this.browser.state().page {
+                                        Page::Folder(path) => this.play_folder(&path.clone(), cx),
+                                        Page::Artist(artist) => this.play_collection(
+                                            Collection::Artist(artist.clone()),
+                                            cx,
+                                        ),
+                                        _ => this.play(this.browser.state().songs.clone(), 0, cx),
                                     },
                                 )),
                             )
@@ -239,6 +239,7 @@ impl PlayerView {
                             .child(
                                 div()
                                     .size(px(34.))
+                                    .flex_shrink_0()
                                     .rounded_full()
                                     .bg(rgb(SELECTED))
                                     .text_color(rgb(ACCENT))
@@ -261,6 +262,24 @@ impl PlayerView {
                                     .text_color(rgb(MUTED))
                                     .child(count_label(artist.album_count, "album")),
                             )
+                            .child({
+                                let artist = artist.clone();
+                                row_play_button(
+                                    format!("play-artist-{}", artist.id).into(),
+                                    "Play artist · Shift+Enter",
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        window.focus(&this.library_focus);
+                                        this.browser.set_cursor(row);
+                                        this.play_collection(
+                                            Collection::Artist(artist.clone()),
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            })
                             .child(icon_sized("forward", MUTED, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);
@@ -346,6 +365,21 @@ impl PlayerView {
                                     .text_color(rgb(MUTED))
                                     .child(count_label(album.song_count, "song")),
                             )
+                            .child({
+                                let album = album.clone();
+                                row_play_button(
+                                    format!("play-album-{}", album.id).into(),
+                                    "Play album · Shift+Enter",
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        window.focus(&this.library_focus);
+                                        this.browser.set_cursor(row);
+                                        this.play_collection(Collection::Album(album.clone()), cx);
+                                    },
+                                ))
+                            })
                             .child(icon_sized("forward", MUTED, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);

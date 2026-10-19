@@ -1,6 +1,7 @@
 mod api;
 mod artwork;
 mod browser;
+mod collection;
 mod connection;
 mod credentials;
 mod diagnostics;
@@ -37,6 +38,19 @@ fn main() {
     Application::new()
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
+            cx.text_system()
+                .add_fonts(vec![
+                    std::borrow::Cow::Borrowed(include_bytes!(
+                        "../assets/fonts/SourceSans3-Regular.ttf"
+                    )),
+                    std::borrow::Cow::Borrowed(include_bytes!(
+                        "../assets/fonts/SourceSans3-Medium.ttf"
+                    )),
+                    std::borrow::Cow::Borrowed(include_bytes!(
+                        "../assets/fonts/SourceSans3-Semibold.ttf"
+                    )),
+                ])
+                .expect("bundled Source Sans 3 fonts are valid");
             input::init(cx);
             cx.on_action(|_: &Quit, cx| {
                 diagnostics::event("Quit requested");

@@ -147,6 +147,9 @@ the exact folder/track/filter in a second process, and Cmd+Q from a password fie
 in a third process. The connection form is checked at 780×640 after a rejected
 login, including the painted bounds of its controls. A long malformed response
 also checks scrolling to the bottom and back to the fields.
+Artist and album queues are started with Shift+Enter without changing pages,
+including a failed request and retry. Folder queues include nested directories.
+The footer is checked for context-specific shortcuts and bounds at narrow widths.
 It also invokes the shared native command dispatchers for
 play/pause/toggle/stop/next/previous, checks repeated play/pause and resuming after
 stop, verifies recovery after the audio worker stops, arrow-key seeking in folders and songs (and text editing in the filter),

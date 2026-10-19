@@ -23,6 +23,8 @@ pub(super) struct RenderProbe {
     pub sidebar_width: f32,
     pub sidebar_icons: BTreeMap<String, [f32; 2]>,
     pub shortcut_hints: BTreeMap<String, String>,
+    pub footer_hints: Vec<String>,
+    pub footer_fits: bool,
 }
 
 #[derive(Deserialize)]
@@ -145,7 +147,11 @@ struct Expected {
     sidebar_width: Option<f32>,
     sidebar_icons: Option<BTreeMap<String, [f32; 2]>>,
     shortcut_hints: Option<BTreeMap<String, String>>,
+    footer_hints: Option<Vec<String>>,
+    footer_fits: Option<bool>,
     current_track: Option<String>,
+    queue_len: Option<usize>,
+    queue_last: Option<String>,
     focus: Option<String>,
     playback: Option<String>,
     media_title: Option<String>,
@@ -176,6 +182,8 @@ struct Snapshot {
     visible: bool,
     sidebar_width: f32,
     current_track: String,
+    queue_len: usize,
+    queue_last: String,
     focus: String,
     playback: String,
     media_title: String,
@@ -261,6 +269,14 @@ impl Snapshot {
                 .current()
                 .map(|song| song.id.clone())
                 .unwrap_or_default(),
+            queue_len: view.transport.queue().test_songs().len(),
+            queue_last: view
+                .transport
+                .queue()
+                .test_songs()
+                .last()
+                .map(|song| song.id.clone())
+                .unwrap_or_default(),
             focus: [
                 (&view.server, "server"),
                 (&view.username, "username"),
@@ -332,6 +348,15 @@ impl Snapshot {
                 .as_ref()
                 .is_none_or(|hints| hints == &self.rendered.shortcut_hints)
             && field!(current_track)
+            && field!(queue_len)
+            && field!(queue_last)
+            && expected
+                .footer_hints
+                .as_ref()
+                .is_none_or(|hints| hints == &self.rendered.footer_hints)
+            && expected
+                .footer_fits
+                .is_none_or(|fits| fits == self.rendered.footer_fits)
             && field!(focus)
             && field!(playback)
             && field!(media_title)
@@ -474,6 +499,7 @@ impl Run {
                 let target = match operation.as_str() {
                     "connection" => FailureTarget::Connection,
                     "library" => FailureTarget::Operation(Operation::Library),
+                    "collection" => FailureTarget::Operation(Operation::Collection),
                     "playback" => FailureTarget::Operation(Operation::Playback),
                     _ => bail!("Unknown retry operation"),
                 };

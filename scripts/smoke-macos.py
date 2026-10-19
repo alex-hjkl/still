@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import uuid
@@ -78,6 +79,7 @@ def main():
     liked = {"song-2"}
     fail_more = True
     fail_songs = args.automated
+    fail_artist = args.automated
     methods = []
     audio = io.BytesIO()
     with wave.open(audio, "wb") as wav:
@@ -91,7 +93,7 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal fail_more, fail_songs
+            nonlocal fail_more, fail_songs, fail_artist
             url = urlsplit(self.path)
             method = url.path.rsplit("/", 1)[-1].removesuffix(".view")
             methods.append(method)
@@ -111,7 +113,13 @@ def main():
                                for index, name in enumerate(sorted({album["artist"] for album in albums}))]
                 body["artists"] = {"index": [{"artist": artists}]}
             elif method == "getArtist":
-                body["artist"] = {"album": albums}
+                if fail_artist:
+                    fail_artist = False
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    if args.automated:
+                        time.sleep(0.5)
+                    body["artist"] = {"album": albums[:2] if args.automated else albums}
             elif method == "getAlbumList2":
                 if offset == 200 and fail_more:
                     fail_more = False
@@ -127,6 +135,9 @@ def main():
             elif method == "getAlbum":
                 album = next((album for album in albums if album["id"] == item_id), albums[0])
                 songs = [track for track in tracks if track["albumId"] == album["id"]] if args.record_demo is not None else tracks
+                if args.automated and album["id"] in {"album-0", "album-1"}:
+                    start = 0 if album["id"] == "album-0" else 60
+                    songs = tracks[start:start + 60]
                 body["album"] = dict(album, song=songs)
             elif method == "search3":
                 size = int(params.get("songCount", ["200"])[0])

@@ -2,6 +2,7 @@ use crate::{
     api::{Album, Artist, Navidrome, Song, time_label},
     artwork::{app_icon, artwork},
     browser::{Browser, BrowserEntry, LibraryData, LibraryRequest, Page},
+    collection::Collection,
     connection::{Activity, ConnectionController, ConnectionEvent},
     credentials::Connection,
     failure::{Failure, Failures, Operation, RetryAction},
@@ -15,6 +16,7 @@ use crate::{
     library_loader::{LibraryLoader, LoadContext, LoadOutcome},
     likes::Likes,
     playback_controller::PlaybackController,
+    requests::Requests,
     settings::{SavedFolder, Section, Settings},
     slider::{CommitMode, Slider, SliderEvent},
     theme::{
@@ -46,6 +48,8 @@ mod library_view;
 mod player_bar;
 #[path = "sidebar.rs"]
 mod sidebar;
+#[path = "status_bar.rs"]
+mod status_bar;
 
 // Single-line labels use truncate(), which also disables wrapping. In GPUI 0.2.2,
 // text_ellipsis() alone can reuse shortened text runs during wrapped layout and
@@ -66,12 +70,11 @@ fn icon(name: &'static str, color: u32) -> gpui::Svg {
 fn wordmark(size: f32) -> gpui::Div {
     div()
         .relative()
-        // Center the visible letters against the icon, rather than the font's
-        // line box, which reserves space below the baseline for descenders.
-        .top(px(size * 0.1))
+        // Optical center of "Still" in the bundled Source Sans 3 Medium.
+        .top(px(size * 0.012))
         .text_size(px(size))
         .line_height(px(size))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_weight(gpui::FontWeight::MEDIUM)
         .child("Still")
 }
 
@@ -110,6 +113,21 @@ fn toolbar_icon(
         .cursor_pointer()
         .hover(|view| view.bg(rgb(HOVER)))
         .child(icon(glyph, MUTED))
+        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
+}
+
+fn row_play_button(id: SharedString, hint: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .size(px(28.))
+        .flex_shrink_0()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|view| view.bg(rgb(HOVER)))
+        .child(icon_sized("play", MUTED, 16.))
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
 }
 
@@ -159,6 +177,8 @@ pub struct PlayerView {
     connection: Entity<ConnectionController>,
     browser: Browser,
     library_loader: Entity<LibraryLoader>,
+    collection_requests: Requests,
+    pending_collection: Option<Collection>,
     server: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
@@ -354,6 +374,8 @@ impl PlayerView {
             connection,
             browser: Browser::default(),
             library_loader,
+            collection_requests: Requests::default(),
+            pending_collection: None,
             server,
             username,
             password,
@@ -425,6 +447,7 @@ impl PlayerView {
         self.remember_folder(cx);
         self.pending_folder = None;
         self.browser.clear();
+        self.cancel_collection();
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
         self.connection
@@ -475,6 +498,7 @@ impl PlayerView {
         let id: SharedString = match &target {
             FailureTarget::Connection => "retry-connection".into(),
             FailureTarget::Operation(Operation::Library) => "retry-library".into(),
+            FailureTarget::Operation(Operation::Collection) => "retry-collection".into(),
             FailureTarget::Operation(Operation::Playback) => "retry-playback".into(),
             FailureTarget::Operation(Operation::Like(id)) => format!("retry-like-{id}").into(),
         };
@@ -680,6 +704,7 @@ impl PlayerView {
         };
         match action {
             RetryAction::Library(request) => self.load(request, cx),
+            RetryAction::Collection(collection) => self.play_collection(collection, cx),
             RetryAction::Playback(generation) => {
                 if self.transport.generation() == generation {
                     self.play_current(cx);
@@ -691,6 +716,7 @@ impl PlayerView {
     }
 
     fn play(&mut self, queue: Arc<Vec<Song>>, index: usize, cx: &mut Context<Self>) {
+        self.cancel_collection();
         if self.demo {
             self.failures.set(
                 Operation::Playback,
@@ -713,6 +739,7 @@ impl PlayerView {
         }
     }
     fn playback_changed(&mut self, cx: &mut Context<Self>) {
+        self.cancel_collection();
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
         self.failures.clear(&Operation::Playback);
         self.follow_current_track();
@@ -748,21 +775,84 @@ impl PlayerView {
         }
     }
 
-    fn play_selected_folder(&mut self, cx: &mut Context<Self>) {
+    fn play_selection(&mut self, cx: &mut Context<Self>) {
         if self.browser.is_loading() {
             return;
         }
         let entries = self.visible_entries();
-        let path = match entries.get(self.browser.state().cursor) {
-            Some(BrowserEntry::Folder(path)) => Some(path.clone()),
+        match entries.get(self.browser.state().cursor) {
+            Some(BrowserEntry::Artist(index)) => self.play_collection(
+                Collection::Artist(self.browser.state().artists[*index].clone()),
+                cx,
+            ),
+            Some(BrowserEntry::Album(index)) => self.play_collection(
+                Collection::Album(self.browser.state().albums[*index].clone()),
+                cx,
+            ),
+            Some(BrowserEntry::Folder(path)) => self.play_folder(path, cx),
             _ => match &self.browser.state().page {
-                Page::Folder(path) => Some(path.clone()),
-                _ => None,
+                Page::Folder(path) => self.play_folder(&path.clone(), cx),
+                Page::Album(_) | Page::Liked => {
+                    self.play(self.browser.state().songs.clone(), 0, cx)
+                }
+                _ => self.play_row(self.browser.state().cursor, cx),
             },
-        };
-        if let Some(path) = path {
-            self.play_folder(&path, cx);
         }
+    }
+
+    fn cancel_collection(&mut self) {
+        self.collection_requests.invalidate();
+        self.pending_collection = None;
+        self.failures.clear(&Operation::Collection);
+    }
+
+    fn play_collection(&mut self, collection: Collection, cx: &mut Context<Self>) {
+        if self.demo {
+            self.play(Arc::default(), 0, cx);
+            return;
+        }
+        let Some(client) = self.connection.read(cx).client.clone() else {
+            return;
+        };
+        let (request_id, cancellation) = self.collection_requests.start();
+        let session_id = self.connection.read(cx).session_id;
+        let generation = self.transport.generation();
+        self.pending_collection = Some(collection.clone());
+        self.failures.clear(&Operation::Collection);
+        let worker_collection = collection.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { worker_collection.songs(&client, &cancellation) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.collection_requests.is_current(request_id)
+                    || this.connection.read(cx).session_id != session_id
+                {
+                    return;
+                }
+                this.pending_collection = None;
+                if this.transport.generation() == generation {
+                    match result {
+                        Ok(songs) if !songs.is_empty() => this.play(Arc::new(songs), 0, cx),
+                        Ok(_) => this.failures.set(
+                            Operation::Collection,
+                            format!("No songs in {}", collection.name()).into(),
+                        ),
+                        Err(error) => this.failures.set(
+                            Operation::Collection,
+                            Failure::new(
+                                format!("Could not play {}: {error:#}", collection.name()),
+                                RetryAction::Collection(collection),
+                            ),
+                        ),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     fn play_folder(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -1093,7 +1183,7 @@ impl PlayerView {
                 .set_cursor(moved_cursor(self.browser.state().cursor, -1, count)),
             Back => self.back(cx),
             Open => self.open_selected(cx),
-            PlayFolder => self.play_selected_folder(cx),
+            PlaySelection => self.play_selection(cx),
             First => self.browser.set_cursor(0),
             Last => self.browser.set_cursor(count.saturating_sub(1)),
             HalfDown | HalfUp | PageDown | PageUp => {
@@ -1254,7 +1344,7 @@ impl Render for PlayerView {
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
             .text_size(px(14.))
-            .font_family("Inter")
+            .font_family("Source Sans 3")
             .flex()
             .flex_col();
         if let Some(warning) = self.settings.warning() {
@@ -1319,52 +1409,7 @@ impl Render for PlayerView {
                     )
                     .child(content),
             )
-            .child(
-                div()
-                    .h(px(28.))
-                    .flex_shrink_0()
-                    .px_4()
-                    .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .gap_4()
-                    .child(div().flex_1().child(
-                        if matches!(self.browser.state().page, Page::Folder(_)) {
-                            "h  Parent     l  Open     j k  Move     /  Find"
-                        } else {
-                            "j k  Move     Enter  Open / play     /  Find"
-                        },
-                    ))
-                    .when(self.browser.state().more, |view| {
-                        view.child(
-                            div()
-                                .id("load-more")
-                                .cursor_pointer()
-                                .text_color(rgb(ACCENT))
-                                .child(if self.browser.is_loading() {
-                                    "Loading…"
-                                } else {
-                                    "Load more · e"
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.load_more(cx))),
-                        )
-                    })
-                    .child(
-                        div()
-                            .id("status-help")
-                            .cursor_pointer()
-                            .child("?  Shortcuts")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_help = true;
-                                window.focus(&this.library_focus);
-                                cx.notify();
-                            })),
-                    ),
-            );
+            .child(self.status_bar(cx));
         root = root
             .child(
                 div()

@@ -18,6 +18,11 @@ APP_ICONS = {
     "assets/app-icon/still.icns",
     "assets/app-icon/still.ico",
 }
+BUNDLED_FONTS = {
+    "assets/fonts/SourceSans3-Regular.ttf",
+    "assets/fonts/SourceSans3-Medium.ttf",
+    "assets/fonts/SourceSans3-Semibold.ttf",
+}
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "access token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16})\b"),
@@ -34,6 +39,8 @@ def main():
     reviewed = json.loads(manifest.read_text())["sha256"] if manifest.exists() else {}
     icon_manifest = ROOT / "assets/app-icon/manifest.json"
     reviewed_icons = json.loads(icon_manifest.read_text())["sha256"] if icon_manifest.exists() else {}
+    font_manifest = ROOT / "assets/fonts/manifest.json"
+    reviewed_fonts = json.loads(font_manifest.read_text())["sha256"] if font_manifest.exists() else {}
     paths = sorted(set(result.stdout.decode().split("\0")) - {""})
     for name in paths:
         path = ROOT / name
@@ -49,6 +56,11 @@ def main():
         if name in APP_ICONS:
             if hashlib.sha256(path.read_bytes()).hexdigest() != reviewed_icons.get(name):
                 findings.append((name, 0, "app icon needs visual review and an updated hash"))
+            continue
+        # Exact upstream font files, pinned after metadata and visual review.
+        if name in BUNDLED_FONTS:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != reviewed_fonts.get(name):
+                findings.append((name, 0, "bundled font needs review and an updated hash"))
             continue
         if path.name.startswith(".env") or path.suffix in {".pem", ".key", ".p12", ".pfx"}:
             findings.append((name, 0, "credential file"))

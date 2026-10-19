@@ -26,6 +26,11 @@ impl PlayQueue {
         self.shuffled
     }
 
+    #[cfg(feature = "ui-tests")]
+    pub fn test_songs(&self) -> &[Song] {
+        &self.songs
+    }
+
     pub fn start(&mut self, songs: Arc<Vec<Song>>, selected: usize) -> bool {
         self.start_with_rng(songs, selected, &mut rand::rng())
     }
