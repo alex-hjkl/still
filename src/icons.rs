@@ -2,8 +2,16 @@ use anyhow::Result;
 use gpui::{AssetSource, SharedString};
 use std::borrow::Cow;
 
-// Phosphor SVGs are embedded so every screen uses the same local icon set.
+// The original Still mark and Phosphor interface icons are embedded locally.
 const ICONS: &[(&str, &[u8])] = &[
+    (
+        "brand-wave",
+        include_bytes!("../assets/app-icon/still-wave.svg"),
+    ),
+    (
+        "brand-ripples",
+        include_bytes!("../assets/app-icon/still-ripples.svg"),
+    ),
     ("sun", include_bytes!("../assets/icons/sun.svg")),
     ("moon", include_bytes!("../assets/icons/moon.svg")),
     ("artists", include_bytes!("../assets/icons/artists.svg")),

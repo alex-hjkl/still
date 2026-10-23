@@ -45,7 +45,7 @@ impl PlayerView {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(app_icon(48.))
+                            .child(app_icon(colors, 48.))
                             .child(wordmark(32.)),
                     )
                     .child(div().text_size(px(26.)).child("Your music. Nothing extra."))

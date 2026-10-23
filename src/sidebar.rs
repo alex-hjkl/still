@@ -175,7 +175,7 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(self.sidebar_icon_slot("brand", app_icon(32.)))
+                    .child(self.sidebar_icon_slot("brand", app_icon(colors, 32.)))
                     .when(!compact, |view| view.child(wordmark(23.))),
             )
             .children(

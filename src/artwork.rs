@@ -11,47 +11,39 @@ use std::{
 
 struct Cover;
 
-pub fn app_icon(edge: f32) -> gpui::Img {
-    static ICONS: OnceLock<[Arc<RenderImage>; 2]> = OnceLock::new();
-    let images = ICONS.get_or_init(|| {
-        let mut source = image::load_from_memory(include_bytes!("../assets/app-icon/still.png"))
-            .expect("bundled application icon is a valid PNG")
-            .into_rgba32f();
-        // GPUI's image sampler has no mipmaps. Resample the large export at
-        // Retina size with premultiplied alpha to preserve its rounded edges.
-        for pixel in source.pixels_mut() {
-            let alpha = pixel.0[3];
-            for channel in &mut pixel.0[..3] {
-                *channel *= alpha;
-            }
-        }
-        [64, 96].map(|pixels| {
-            let mut data = image::imageops::resize(
-                &source,
-                pixels,
-                pixels,
-                image::imageops::FilterType::Lanczos3,
-            );
-            for pixel in data.pixels_mut() {
-                let alpha = pixel.0[3].clamp(0., 1.);
-                pixel.0[3] = alpha;
-                if alpha > 0. {
-                    for channel in &mut pixel.0[..3] {
-                        *channel = (*channel / alpha).clamp(0., 1.);
-                    }
-                }
-            }
-            let mut data = image::DynamicImage::ImageRgba32F(data).into_rgba8();
-            for pixel in data.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
-            Arc::new(RenderImage::new(vec![image::Frame::new(data)]))
-        })
-    });
-    img(images[usize::from(edge > 32.)].clone())
+// Keep the original 512-unit geometry, including its inset rounded tile.
+// Separate SVG masks let each part follow the active theme without recoloring
+// album artwork or caching a bitmap from the previous theme.
+pub fn app_icon(colors: Palette, edge: f32) -> gpui::Div {
+    div()
+        .relative()
         .size(px(edge))
         .flex_shrink_0()
-        .object_fit(ObjectFit::Contain)
+        .child(
+            div()
+                .absolute()
+                .top(px(edge / 16.))
+                .left(px(edge / 16.))
+                .size(px(edge * 7. / 8.))
+                .rounded(px(edge * 102. / 512.))
+                .bg(rgb(colors.selected)),
+        )
+        .child(
+            svg()
+                .absolute()
+                .inset_0()
+                .size(px(edge))
+                .path("brand-wave")
+                .text_color(rgb(colors.accent)),
+        )
+        .child(
+            svg()
+                .absolute()
+                .inset_0()
+                .size(px(edge))
+                .path("brand-ripples")
+                .text_color(rgb(colors.artwork_icon)),
+        )
 }
 
 impl Asset for Cover {
