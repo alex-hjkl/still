@@ -2,6 +2,7 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let mut hints = vec![("j k", "Move")];
         match self.browser.state().page {
             Page::Artists => hints.extend([("Enter", "Open"), ("⇧ Enter", "Play artist")]),
@@ -59,7 +60,7 @@ impl PlayerView {
                         .child(
                             div()
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(colors.text))
                                 .child(key),
                         )
                         .child(label)
@@ -81,12 +82,12 @@ impl PlayerView {
             .px_4()
             .py_1()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors.border))
             .flex()
             .items_center()
             .gap_4()
-            .text_xs()
-            .text_color(rgb(MUTED))
+            .text_size(px(TEXT_CAPTION))
+            .text_color(rgb(colors.muted))
             .child(hints)
             .when(self.browser.state().more, |view| {
                 view.child(
@@ -94,7 +95,7 @@ impl PlayerView {
                         .id("load-more")
                         .flex_shrink_0()
                         .cursor_pointer()
-                        .text_color(rgb(ACCENT))
+                        .text_color(rgb(colors.accent))
                         .child(if self.browser.is_loading() {
                             "Loading…"
                         } else {

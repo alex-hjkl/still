@@ -19,6 +19,8 @@ https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
 - Stream music with queue advancement, shuffle, seeking, volume and mute.
 - Control playback with macOS media keys and Now Playing.
 - Find within loaded lists and switch between compact and expanded sidebars.
+- Switch between [Catppuccin](https://catppuccin.com/palette/) Latte (light) and
+  Macchiato (dark) with the sun / moon button; your choice is saved.
 
 ## Run
 

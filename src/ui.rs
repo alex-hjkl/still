@@ -19,10 +19,7 @@ use crate::{
     requests::Requests,
     settings::{SavedFolder, Section, Settings},
     slider::{CommitMode, Slider, SliderEvent},
-    theme::{
-        ACCENT, ACCENT_HOVER, ARTWORK_ICON, BG, BORDER, ERROR_BG, ERROR_TEXT, HOVER,
-        KEYBOARD_FOCUS, LIKED, MUTED, ON_ACCENT, PANEL, SELECTED, TEXT,
-    },
+    theme::{Palette, TEXT_BODY, TEXT_CAPTION, TEXT_SECONDARY, Theme},
 };
 use gpui::{
     Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, ScrollStrategy,
@@ -79,6 +76,7 @@ fn wordmark(size: f32) -> gpui::Div {
 }
 
 fn button(
+    colors: Palette,
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
@@ -91,13 +89,14 @@ fn button(
         .px_4()
         .py_2()
         .rounded_md()
-        .bg(rgb(HOVER))
-        .text_color(rgb(TEXT))
+        .bg(rgb(colors.hover))
+        .text_color(rgb(colors.text))
         .cursor_pointer()
         .child(label.into())
 }
 
 fn toolbar_icon(
+    colors: Palette,
     id: &'static str,
     glyph: &'static str,
     hint: &'static str,
@@ -111,12 +110,16 @@ fn toolbar_icon(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|view| view.bg(rgb(HOVER)))
-        .child(icon(glyph, MUTED))
+        .hover(move |view| view.bg(rgb(colors.hover)))
+        .child(icon(glyph, colors.muted))
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
 }
 
-fn row_play_button(id: SharedString, hint: &'static str) -> gpui::Stateful<gpui::Div> {
+fn row_play_button(
+    colors: Palette,
+    id: SharedString,
+    hint: &'static str,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .size(px(28.))
@@ -126,8 +129,8 @@ fn row_play_button(id: SharedString, hint: &'static str) -> gpui::Stateful<gpui:
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|view| view.bg(rgb(HOVER)))
-        .child(icon_sized("play", MUTED, 16.))
+        .hover(move |view| view.bg(rgb(colors.hover)))
+        .child(icon_sized("play", colors.muted, 16.))
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
 }
 
@@ -140,19 +143,20 @@ impl Hint {
 }
 
 impl Render for Hint {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         div()
             .px_3()
             .py_2()
             .rounded_md()
-            .bg(rgb(TEXT))
-            .text_color(rgb(ON_ACCENT))
-            .text_sm()
+            .bg(rgb(colors.tooltip_bg))
+            .text_color(rgb(colors.tooltip_text))
+            .text_size(px(TEXT_SECONDARY))
             .child(self.0.clone())
     }
 }
 
-fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
+fn track_row(colors: Palette, id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .w_full()
@@ -162,9 +166,9 @@ fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
         .gap_4()
         .px_3()
         .border_b_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors.border))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(PANEL)))
+        .hover(move |s| s.bg(rgb(colors.panel)))
 }
 
 #[derive(Clone)]
@@ -495,6 +499,7 @@ impl PlayerView {
         retry: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let id: SharedString = match &target {
             FailureTarget::Connection => "retry-connection".into(),
             FailureTarget::Operation(Operation::Library) => "retry-library".into(),
@@ -508,15 +513,15 @@ impl PlayerView {
             .flex_shrink_0()
             .p_3()
             .rounded_md()
-            .bg(rgb(ERROR_BG))
-            .text_color(rgb(ERROR_TEXT))
+            .bg(rgb(colors.error_bg))
+            .text_color(rgb(colors.error_text))
             .flex()
             .items_center()
             .gap_3()
             .child(div().flex_1().min_w_0().whitespace_normal().child(message))
             .when(retry, |view| {
                 view.child(
-                    button(id, "Retry").on_click(
+                    button(colors, id, "Retry").on_click(
                         cx.listener(move |this, _, _, cx| this.retry(target.clone(), cx)),
                     ),
                 )
@@ -947,6 +952,7 @@ impl PlayerView {
         slot: &'static str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let liked = self.likes.is_liked(song);
         let pending = self.likes.is_pending(&song.id);
         let song = song.clone();
@@ -967,10 +973,10 @@ impl PlayerView {
             .rounded_full()
             .when(pending, |view| view.opacity(0.5))
             .when(!pending, |view| view.cursor_pointer())
-            .hover(|s| s.bg(rgb(HOVER)))
+            .hover(move |s| s.bg(rgb(colors.hover)))
             .child(icon(
                 if liked { "heart-filled" } else { "heart" },
-                if liked { LIKED } else { MUTED },
+                if liked { colors.liked } else { colors.muted },
             ))
             .tooltip(move |_, cx| cx.new(|_| Hint::new(label)).into())
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1265,6 +1271,28 @@ impl PlayerView {
         cx.notify();
     }
 
+    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        let theme = self.settings.value().theme.toggled();
+        self.settings.update(|value| value.theme = theme);
+        theme.apply(cx);
+        cx.notify();
+    }
+
+    fn theme_toggle(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let colors = crate::theme::colors(cx);
+        let glyph = match self.settings.value().theme {
+            Theme::Latte => "moon",
+            Theme::Macchiato => "sun",
+        };
+        toolbar_icon(
+            colors,
+            "toggle-theme",
+            glyph,
+            "Latte / Macchiato · Switch theme",
+        )
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx)))
+    }
+
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.settings
             .update(|value| value.sidebar_compact = !value.sidebar_compact);
@@ -1331,9 +1359,13 @@ impl PlayerView {
 
 impl Render for PlayerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         #[cfg(feature = "ui-tests")]
         {
-            *self.ui_probe.borrow_mut() = ui_tests::RenderProbe::default();
+            *self.ui_probe.borrow_mut() = ui_tests::RenderProbe {
+                theme_bg: colors.bg,
+                ..Default::default()
+            };
         }
         // Retain subscriptions for the lifetime of the view.
         let _ = &self.subscriptions;
@@ -1341,9 +1373,9 @@ impl Render for PlayerView {
         let mut root = div()
             .relative()
             .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .text_size(px(14.))
+            .bg(rgb(colors.bg))
+            .text_color(rgb(colors.text))
+            .text_size(px(TEXT_BODY))
             .font_family("Source Sans 3")
             .flex()
             .flex_col();
@@ -1353,14 +1385,20 @@ impl Render for PlayerView {
                     .flex_shrink_0()
                     .px_4()
                     .py_2()
-                    .bg(rgb(ERROR_BG))
-                    .text_color(rgb(ERROR_TEXT))
-                    .text_sm()
+                    .bg(rgb(colors.error_bg))
+                    .text_color(rgb(colors.error_text))
+                    .text_size(px(TEXT_SECONDARY))
                     .child(warning.to_owned()),
             );
         }
         if !connected {
-            return root.child(self.connection_screen(cx));
+            return root.child(self.connection_screen(cx)).child(
+                div()
+                    .absolute()
+                    .top(px(16.))
+                    .right(px(16.))
+                    .child(self.theme_toggle(cx)),
+            );
         }
         if self.focus_library {
             window.focus(&self.library_focus);
@@ -1379,7 +1417,7 @@ impl Render for PlayerView {
                 }),
             );
         let content = if self.browser.is_loading() && !self.browser.state().more {
-            empty_state("Loading your library…", "")
+            empty_state(colors, "Loading your library…", "")
         } else {
             match self.browser.state().page {
                 Page::Artists => self.artists_list(cx),
@@ -1427,7 +1465,7 @@ impl Render for PlayerView {
         #[cfg(feature = "ui-tests")]
         {
             root = root.when_some(
-                ui_tests::demo_overlay(self.demo_hint.as_ref()),
+                ui_tests::demo_overlay(colors, self.demo_hint.as_ref()),
                 |root, overlay| root.child(overlay),
             );
         }
@@ -1439,7 +1477,7 @@ fn count_label(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-fn empty_state(message: &str, query: &str) -> gpui::AnyElement {
+fn empty_state(colors: Palette, message: &str, query: &str) -> gpui::AnyElement {
     div()
         .flex_1()
         .flex()
@@ -1447,12 +1485,12 @@ fn empty_state(message: &str, query: &str) -> gpui::AnyElement {
         .items_center()
         .justify_center()
         .gap_3()
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors.muted))
         .child(
             svg()
                 .path("songs")
                 .size(px(32.))
-                .text_color(rgb(ARTWORK_ICON)),
+                .text_color(rgb(colors.artwork_icon)),
         )
         .child(if query.is_empty() {
             message.to_owned()

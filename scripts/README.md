@@ -157,6 +157,8 @@ three arrow keys in one frame and a batch of three native Skip commands,
 checks playback shortcuts with keyboard help open without navigating the hidden library,
 and reads title, position and playback state back from MPNowPlayingInfoCenter.
 The Find count and the unchanged library columns behind the help panel are also checked.
+Theme checks cover Latte / Macchiato switching, preserving filter focus and text,
+restoring the theme after restart, and both library and connection-screen palettes.
 The suite simulates an unavailable credential store without reading or writing saved
 logins, navigates to a failing library request, and retries each operation separately.
 It also checks playback Retry across navigation and verifies that restoring Folders

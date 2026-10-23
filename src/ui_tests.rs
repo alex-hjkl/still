@@ -15,6 +15,7 @@ use std::{
 
 #[derive(Default, Clone, Serialize)]
 pub(super) struct RenderProbe {
+    pub theme_bg: u32,
     pub connection_fits: Option<bool>,
     pub columns: BTreeMap<String, String>,
     pub failures: Vec<String>,
@@ -30,6 +31,7 @@ pub(super) struct RenderProbe {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Step {
+    ToggleTheme,
     Wait {
         milliseconds: u64,
     },
@@ -82,7 +84,7 @@ pub(super) struct DemoHint {
     shown: Instant,
 }
 
-pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
+pub(super) fn demo_overlay(colors: Palette, hint: Option<&DemoHint>) -> Option<gpui::Div> {
     let hint = hint.filter(|hint| hint.shown.elapsed() < Duration::from_millis(4000))?;
     Some(
         div()
@@ -100,22 +102,22 @@ pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
                     .px_4()
                     .py_3()
                     .rounded_lg()
-                    .bg(rgb(TEXT))
+                    .bg(rgb(colors.tooltip_bg))
                     .shadow_lg()
                     .child(
                         div()
                             .px_3()
                             .py_1()
                             .rounded_md()
-                            .bg(rgb(SELECTED))
-                            .text_color(rgb(ACCENT))
+                            .bg(rgb(colors.selected))
+                            .text_color(rgb(colors.accent))
                             .text_size(px(20.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(hint.keys.clone()),
                     )
                     .child(
                         div()
-                            .text_color(rgb(ON_ACCENT))
+                            .text_color(rgb(colors.tooltip_text))
                             .text_size(px(16.))
                             .child(hint.label.clone()),
                     ),
@@ -125,6 +127,8 @@ pub(super) fn demo_overlay(hint: Option<&DemoHint>) -> Option<gpui::Div> {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Expected {
+    theme: Option<Theme>,
+    theme_bg: Option<u32>,
     connection_fits: Option<bool>,
     connection_scroll_y: Option<f32>,
     connection_scrolled_to_bottom: Option<bool>,
@@ -165,6 +169,7 @@ struct Expected {
 
 #[derive(Serialize)]
 struct Snapshot {
+    theme: Theme,
     connection_scroll_max: f32,
     connection_scroll_y: f32,
     connected: bool,
@@ -227,6 +232,7 @@ impl Snapshot {
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         Self {
+            theme: view.settings.value().theme,
             connection_scroll_max: f32::from(view.connection_scroll.max_offset().height),
             connection_scroll_y: f32::from(view.connection_scroll.offset().y),
             playback: match view.transport.state().status {
@@ -303,7 +309,11 @@ impl Snapshot {
                     .is_none_or(|value| value == &self.$field)
             };
         }
-        field!(connected)
+        field!(theme)
+            && expected
+                .theme_bg
+                .is_none_or(|bg| self.rendered.theme_bg == bg)
+            && field!(connected)
             && expected
                 .connection_fits
                 .is_none_or(|fits| self.rendered.connection_fits == Some(fits))
@@ -410,6 +420,9 @@ impl Run {
     fn step(&mut self, window: &mut Window, cx: &mut gpui::App) -> Result<bool> {
         let step = self.steps.front().context("UI script must end with quit")?;
         match step {
+            Step::ToggleTheme => {
+                self.view.update(cx, |view, cx| view.toggle_theme(cx));
+            }
             Step::Wait { milliseconds } => {
                 if self.waiting_since.elapsed() < Duration::from_millis(*milliseconds) {
                     return Ok(true);

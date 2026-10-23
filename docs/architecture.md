@@ -17,6 +17,11 @@ where practical; views adapt user input and asynchronous results to those models
 - `connection.rs`: connection controller owning authentication, credential persistence,
   operation identities and connection failures. It emits connection events for the view.
   `credentials.rs` adapts the system credential store.
+- `theme.rs`: Catppuccin Latte / Macchiato semantic palettes and the active GPUI
+  global. The saved `theme` preference defaults to Latte for older settings.
+  Switching refreshes all windows so independent inputs, sliders and tooltips
+  repaint with the same palette. On macOS it also sets the app’s native Aqua /
+  Dark Aqua appearance so title bars and system menus match.
 - `settings.rs`, `diagnostics.rs`: background preferences persistence and diagnostics.
 - `slider.rs`: reusable GPUI slider with pointer state and preview/change events.
 - `ui.rs`: application view, navigation and coordination of controllers.

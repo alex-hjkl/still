@@ -5475,6 +5475,7 @@ dependencies = [
  "libc",
  "md5",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "objc2-media-player",
  "rand 0.10.3",

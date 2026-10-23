@@ -2,13 +2,14 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn help_overlay(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let width =
             (f32::from(window.viewport_size().width) - self.sidebar_width() - 32.).min(640.);
         div()
             .id("help-backdrop")
             .absolute()
             .inset_0()
-            .bg(gpui::rgba(0x25302928))
+            .bg(gpui::rgba(colors.backdrop))
             .occlude()
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -29,10 +30,10 @@ impl PlayerView {
                     .bottom(px(16.))
                     .w(px(width))
                     .p_4()
-                    .bg(rgb(BG))
+                    .bg(rgb(colors.bg))
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(colors.border))
                     .shadow_lg()
                     .occlude()
                     .flex()
@@ -49,24 +50,24 @@ impl PlayerView {
                             .child(
                                 div()
                                     .flex_1()
-                                    .text_size(px(20.))
+                                    .text_size(px(22.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .child("Keyboard shortcuts"),
                             )
-                            .child(button("close-help", "Close · Esc").on_click(cx.listener(
-                                |this, _, window, cx| {
+                            .child(button(colors, "close-help", "Close · Esc").on_click(
+                                cx.listener(|this, _, window, cx| {
                                     this.show_help = false;
                                     window.focus(&this.library_focus);
                                     cx.notify();
-                                },
-                            ))),
+                                }),
+                            )),
                     )
-                    .child(self.keyboard_help(width - 32.)),
+                    .child(self.keyboard_help(colors, width - 32.)),
             )
             .into_any_element()
     }
 
-    fn keyboard_help(&self, width: f32) -> gpui::AnyElement {
+    fn keyboard_help(&self, colors: Palette, width: f32) -> gpui::AnyElement {
         let column_width = width - 8.;
         let groups = [
             (
@@ -126,7 +127,7 @@ impl PlayerView {
                             .gap_3()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(TEXT_SECONDARY))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .child(title),
                             )
@@ -143,9 +144,9 @@ impl PlayerView {
                                         div()
                                             .w(px(128.))
                                             .flex_none()
-                                            .text_sm()
+                                            .text_size(px(TEXT_SECONDARY))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(rgb(ACCENT))
+                                            .text_color(rgb(colors.accent))
                                             .child(keys),
                                     )
                                     .child(
@@ -153,8 +154,8 @@ impl PlayerView {
                                             .w(px(column_width - 140.))
                                             .flex_none()
                                             .min_w_0()
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
+                                            .text_size(px(TEXT_SECONDARY))
+                                            .text_color(rgb(colors.muted))
                                             .whitespace_normal()
                                             .child(text),
                                     )

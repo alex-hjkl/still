@@ -8,16 +8,16 @@ enum Column {
     Preview,
 }
 
-fn column_header(path: &str) -> gpui::Div {
+fn column_header(colors: Palette, path: &str) -> gpui::Div {
     div()
         .h(px(40.))
         .flex_shrink_0()
         .px_3()
         .flex()
         .items_center()
-        .bg(rgb(PANEL))
+        .bg(rgb(colors.panel))
         .border_b_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors.border))
         .child(
             div()
                 .min_w_0()
@@ -34,11 +34,11 @@ fn column_header(path: &str) -> gpui::Div {
         )
 }
 
-fn column_message(message: &'static str) -> gpui::Div {
+fn column_message(colors: Palette, message: &'static str) -> gpui::Div {
     div()
         .p_3()
-        .text_sm()
-        .text_color(rgb(MUTED))
+        .text_size(px(TEXT_SECONDARY))
+        .text_color(rgb(colors.muted))
         .whitespace_normal()
         .child(message)
 }
@@ -62,11 +62,12 @@ impl PlayerView {
     }
 
     pub(super) fn folder_columns(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let Page::Folder(path) = &self.browser.state().page else {
             unreachable!();
         };
         if self.browser.folder_library().is_none() {
-            return empty_state("Folders have not been loaded yet", "");
+            return empty_state(colors, "Folders have not been loaded yet", "");
         }
         let parent = parent_path(path)
             .map(|parent| self.folder_column(parent, Column::Parent, Some(path), cx));
@@ -79,7 +80,10 @@ impl PlayerView {
             _ => div()
                 .flex_1()
                 .min_w_0()
-                .child(column_message("Select a folder or song to preview it"))
+                .child(column_message(
+                    colors,
+                    "Select a folder or song to preview it",
+                ))
                 .into_any_element(),
         };
         div()
@@ -96,7 +100,7 @@ impl PlayerView {
                     .flex_shrink_0()
                     .flex()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(colors.border))
                     .children(parent)
                     .when(path.is_empty(), |view| {
                         view.child(
@@ -105,7 +109,7 @@ impl PlayerView {
                                 .h_full()
                                 .flex()
                                 .flex_col()
-                                .child(column_message("Library root")),
+                                .child(column_message(colors, "Library root")),
                         )
                     }),
             )
@@ -117,7 +121,7 @@ impl PlayerView {
                     .flex_shrink_0()
                     .flex()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(colors.border))
                     .child(self.folder_column(path, Column::Current, None, cx)),
             )
             .child(preview)
@@ -131,6 +135,7 @@ impl PlayerView {
         child: Option<&str>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let entries = self.browser.folder_entries(path);
         let selected = if column == Column::Current {
             Some(self.browser.state().cursor)
@@ -162,10 +167,11 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header(path));
+            .child(column_header(colors, path));
         if entries.is_empty() {
             return pane
                 .child(column_message(
+                    colors,
                     if column == Column::Current && !self.browser.state().query.is_empty() {
                         "No matching items"
                     } else {
@@ -207,7 +213,7 @@ impl PlayerView {
                                 }
                                 _ => unreachable!(),
                             };
-                            let color = if active { ACCENT } else { TEXT };
+                            let color = if active { colors.accent } else { colors.text };
                             let path = path.clone();
                             let selected_entry = entries[row].clone();
                             div()
@@ -219,13 +225,13 @@ impl PlayerView {
                                 .gap_2()
                                 .px_3()
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(rgb(colors.border))
                                 .cursor_pointer()
-                                .when(selected == Some(row), |view| view.bg(rgb(SELECTED)))
+                                .when(selected == Some(row), |view| view.bg(rgb(colors.selected)))
                                 .when(column == Column::Current && this.cursor_on(row), |view| {
-                                    view.border_1().border_color(rgb(KEYBOARD_FOCUS))
+                                    view.border_1().border_color(rgb(colors.keyboard_focus))
                                 })
-                                .hover(|style| style.bg(rgb(HOVER)))
+                                .hover(move |style| style.bg(rgb(colors.hover)))
                                 .child(icon(
                                     if folder_entry {
                                         "folders"
@@ -238,7 +244,7 @@ impl PlayerView {
                                     } else {
                                         "songs"
                                     },
-                                    if folder_entry { ACCENT } else { color },
+                                    if folder_entry { colors.accent } else { color },
                                 ))
                                 .child(
                                     div()
@@ -250,8 +256,8 @@ impl PlayerView {
                                         .when(!detail.is_empty(), |view| {
                                             view.child(
                                                 div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
+                                                    .text_size(px(TEXT_CAPTION))
+                                                    .text_color(rgb(colors.muted))
                                                     .truncate()
                                                     .child(detail),
                                             )
@@ -264,6 +270,7 @@ impl PlayerView {
                                     let child = child.clone();
                                     view.child(
                                         row_play_button(
+                                            colors,
                                             format!("play-folder-{child}").into(),
                                             "Play folder and subfolders · Shift+Enter",
                                         )
@@ -298,6 +305,7 @@ impl PlayerView {
     }
 
     fn song_preview(&self, entry: &BrowserEntry, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let song = self.entry_song(entry).expect("selected song");
         #[cfg(feature = "ui-tests")]
         {
@@ -322,6 +330,7 @@ impl PlayerView {
                     .items_start()
                     .gap_4()
                     .child(artwork(
+                        colors,
                         self.connection.read(cx).client.as_ref(),
                         song.cover_art.as_deref(),
                         96.,
@@ -335,15 +344,15 @@ impl PlayerView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_size(px(16.))
+                                    .text_size(px(18.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .whitespace_normal()
                                     .child(song.title.clone()),
                             )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(colors.muted))
                                     .whitespace_normal()
                                     .child(song.artist.clone()),
                             ),
@@ -352,8 +361,8 @@ impl PlayerView {
                         div()
                             .w_full()
                             .flex_shrink_0()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
+                            .text_size(px(TEXT_CAPTION))
+                            .text_color(rgb(colors.muted))
                             .whitespace_normal()
                             .child(if song.album.is_empty() {
                                 time_label(song.duration)
@@ -368,10 +377,10 @@ impl PlayerView {
                             .items_center()
                             .gap_2()
                             .child(
-                                button("folder-preview-play", "Play · Enter")
-                                    .bg(rgb(ACCENT))
-                                    .text_color(rgb(ON_ACCENT))
-                                    .hover(|view| view.bg(rgb(ACCENT_HOVER)))
+                                button(colors, "folder-preview-play", "Play · Enter")
+                                    .bg(rgb(colors.accent))
+                                    .text_color(rgb(colors.on_accent))
+                                    .hover(move |view| view.bg(rgb(colors.accent_hover)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.play_row(row, cx);
                                     })),

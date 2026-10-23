@@ -51,6 +51,7 @@ fn main() {
                     )),
                 ])
                 .expect("bundled Source Sans 3 fonts are valid");
+            settings.value().theme.apply(cx);
             input::init(cx);
             cx.on_action(|_: &Quit, cx| {
                 diagnostics::event("Quit requested");

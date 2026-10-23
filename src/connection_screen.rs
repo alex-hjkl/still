@@ -1,24 +1,32 @@
 use super::*;
-use crate::theme::{INPUT_BG, INPUT_BORDER};
 
-fn remember_checkbox(checked: bool) -> gpui::Div {
+fn remember_checkbox(colors: Palette, checked: bool) -> gpui::Div {
     div()
         .size(px(18.))
         .flex_shrink_0()
         .rounded_sm()
         .border_1()
-        .border_color(rgb(if checked { ACCENT } else { INPUT_BORDER }))
-        .bg(rgb(if checked { ACCENT } else { INPUT_BG }))
+        .border_color(rgb(if checked {
+            colors.accent
+        } else {
+            colors.input_border
+        }))
+        .bg(rgb(if checked {
+            colors.accent
+        } else {
+            colors.input_bg
+        }))
         .flex()
         .items_center()
         .justify_center()
         .when(checked, |view| {
-            view.child(icon_sized("check", ON_ACCENT, 12.))
+            view.child(icon_sized("check", colors.on_accent, 12.))
         })
 }
 
 impl PlayerView {
     pub(super) fn connection_screen(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let form = div()
             .w(px(380.))
             .max_w_full()
@@ -40,11 +48,11 @@ impl PlayerView {
                             .child(app_icon(48.))
                             .child(wordmark(32.)),
                     )
-                    .child(div().text_size(px(24.)).child("Your music. Nothing extra."))
+                    .child(div().text_size(px(26.)).child("Your music. Nothing extra."))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
+                            .text_size(px(TEXT_SECONDARY))
+                            .text_color(rgb(colors.muted))
                             .line_height(px(20.))
                             .whitespace_normal()
                             .child("Connect to Navidrome to listen to your library."),
@@ -64,7 +72,12 @@ impl PlayerView {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(div().text_sm().text_color(rgb(MUTED)).child(label))
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(colors.muted))
+                                    .child(label),
+                            )
                             .child(input)
                     }),
                 ),
@@ -77,12 +90,12 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_sm()
+                    .text_size(px(TEXT_SECONDARY))
                     .when(!self.connection.read(cx).is_busy(), |view| {
                         view.cursor_pointer()
                     })
                     .when(self.connection.read(cx).is_busy(), |view| view.opacity(0.6))
-                    .child(remember_checkbox(self.connection.read(cx).remember))
+                    .child(remember_checkbox(colors, self.connection.read(cx).remember))
                     .child("Remember connection")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.connection
@@ -92,6 +105,7 @@ impl PlayerView {
             .children(self.failure_banners(cx))
             .child(
                 button(
+                    colors,
                     "connect",
                     match self.connection.read(cx).activity {
                         Activity::Idle => "Connect",
@@ -101,27 +115,27 @@ impl PlayerView {
                         Activity::Forgetting => "Forgetting connection…",
                     },
                 )
-                .bg(rgb(ACCENT))
-                .text_color(rgb(ON_ACCENT))
+                .bg(rgb(colors.accent))
+                .text_color(rgb(colors.on_accent))
                 .h(px(44.))
                 .flex_shrink_0()
-                .hover(|s| s.bg(rgb(ACCENT_HOVER)))
+                .hover(move |s| s.bg(rgb(colors.accent_hover)))
                 .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
             )
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_xs()
+                    .text_size(px(TEXT_CAPTION))
                     .line_height(px(18.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors.muted))
                     .whitespace_normal()
                     .child("Your saved connection is protected by the system credential store."),
             )
             .when(self.connection.read(cx).saved, |view| {
                 view.child(
-                    button("forget-connection", "Forget connection")
+                    button(colors, "forget-connection", "Forget connection")
                         .flex_shrink_0()
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.connection
                                 .update(cx, |connection, cx| connection.forget(cx))

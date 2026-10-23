@@ -33,7 +33,8 @@ def scenario(launch, tracks):
 
     if launch == 2:
         return [dict(action="resize", size=[780, 640]),
-                expect(connected=False, connection_fits=True),
+                expect(connected=False, connection_fits=True, theme="latte", theme_bg=0xeff1f5),
+                dict(action="toggle_theme"), expect(theme="macchiato", theme_bg=0x24273a, connection_fits=True),
                 key("tab"), expect(focus="username"), dict(action="text", text="invalid"),
                 key("tab"), expect(focus="password"), dict(action="text", text="fixture"),
                 key("enter"), expect(connected=False, failures=["retry-connection"], connection_fits=True),
@@ -48,7 +49,9 @@ def scenario(launch, tracks):
     restored = folder(cd2, "song-35", filter="035", preview_song="song-35",
                       columns=dict(parent=film, current=cd2))
     if launch == 1:
-        return [restored, expect(sidebar_width=208), key("cmd-b"), expect(sidebar_width=64, sidebar_icons=sidebar_icons()), key("escape"), key("h"), key("k"), key("l"),
+        return [restored, expect(theme="macchiato", theme_bg=0x24273a),
+                dict(action="toggle_theme"), expect(theme="latte", theme_bg=0xeff1f5),
+                expect(sidebar_width=208), key("cmd-b"), expect(sidebar_width=64, sidebar_icons=sidebar_icons()), key("escape"), key("h"), key("k"), key("l"),
                 folder(cd1, "song-0", filter="", preview_song="song-0"),
                 key("enter"), expect(current_track="song-0", playback="playing", media_state="playing", media_title=tracks[0]["title"]),
                 media("pause"), expect(playback="paused", media_state="paused"),
@@ -106,6 +109,8 @@ def scenario(launch, tracks):
                 dict(action="quit")]
 
     return [
+        expect(theme="latte", theme_bg=0xeff1f5),
+        dict(action="toggle_theme"), expect(theme="macchiato", theme_bg=0x24273a),
         expect(connected=True, loaded=True, page="artists", sidebar_width=64, sidebar_icons=sidebar_icons()),
         dict(action="fail_connection_save"), expect(failures=["retry-connection"]),
         key("cmd-3"), expect(page="songs", loaded=False, failures=["retry-connection", "retry-library"]),
@@ -149,6 +154,8 @@ def scenario(launch, tracks):
         dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
         key("/"), expect(focus="filter"), dict(action="text", text="035"), key("cmd-b"),
         expect(sidebar_width=208, focus="filter", filter="035", find_summary="1 of 30 loaded items"),
+        dict(action="toggle_theme"), expect(theme="latte", focus="filter", filter="035", theme_bg=0xeff1f5),
+        dict(action="toggle_theme"), expect(theme="macchiato", focus="filter", filter="035", theme_bg=0x24273a),
         dict(action="resize", size=[780, 640]), expect(size=[780, 640], sidebar_width=208, visible=True, sidebar_icons=sidebar_icons(640), footer_fits=True),
         key("cmd-b"), expect(sidebar_width=64, focus="filter", filter="035", sidebar_icons=sidebar_icons(640)),
         key("cmd-b"), expect(sidebar_width=208, focus="filter", filter="035", sidebar_icons=sidebar_icons(640)),

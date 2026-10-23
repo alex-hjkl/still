@@ -1,7 +1,4 @@
-use crate::{
-    api::Navidrome,
-    theme::{ARTWORK_BG, ARTWORK_ICON},
-};
+use crate::{api::Navidrome, theme::Palette};
 use anyhow::Result;
 use gpui::{
     App, Asset, ImageCacheError, IntoElement, ObjectFit, RenderImage, Window, div, img, prelude::*,
@@ -96,13 +93,18 @@ impl Asset for Cover {
     }
 }
 
-pub fn artwork(client: Option<&Navidrome>, id: Option<&str>, edge: f32) -> gpui::AnyElement {
+pub fn artwork(
+    colors: Palette,
+    client: Option<&Navidrome>,
+    id: Option<&str>,
+    edge: f32,
+) -> gpui::AnyElement {
     let placeholder = move || {
         div()
             .size(px(edge))
             .flex_shrink_0()
             .rounded_md()
-            .bg(rgb(ARTWORK_BG))
+            .bg(rgb(colors.artwork_bg))
             .flex()
             .items_center()
             .justify_center()
@@ -110,7 +112,7 @@ pub fn artwork(client: Option<&Navidrome>, id: Option<&str>, edge: f32) -> gpui:
                 svg()
                     .path("albums")
                     .size(px(edge * 0.28))
-                    .text_color(rgb(ARTWORK_ICON)),
+                    .text_color(rgb(colors.artwork_icon)),
             )
             .into_any_element()
     };

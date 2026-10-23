@@ -4,6 +4,8 @@ use std::borrow::Cow;
 
 // Phosphor SVGs are embedded so every screen uses the same local icon set.
 const ICONS: &[(&str, &[u8])] = &[
+    ("sun", include_bytes!("../assets/icons/sun.svg")),
+    ("moon", include_bytes!("../assets/icons/moon.svg")),
     ("artists", include_bytes!("../assets/icons/artists.svg")),
     ("albums", include_bytes!("../assets/icons/albums.svg")),
     ("songs", include_bytes!("../assets/icons/songs.svg")),

@@ -2,6 +2,7 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn player_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let current = self.transport.queue().current();
         let enabled = current.is_some();
         let duration = current.map_or(0, |song| song.duration);
@@ -27,9 +28,9 @@ impl PlayerView {
         div()
             .h(px(PLAYER_HEIGHT))
             .flex_shrink_0()
-            .bg(rgb(PANEL))
+            .bg(rgb(colors.panel))
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors.border))
             .flex()
             .flex_col()
             .justify_center()
@@ -49,6 +50,7 @@ impl PlayerView {
                             .gap_3()
                             .min_w_0()
                             .child(artwork(
+                                colors,
                                 self.connection.read(cx).client.as_ref(),
                                 current.and_then(|song| song.cover_art.as_deref()),
                                 40.,
@@ -72,16 +74,18 @@ impl PlayerView {
                                             ),
                                     )
                                     .child(
-                                        div().text_sm().text_color(rgb(MUTED)).truncate().child(
-                                            if self.transport.state().is_loading() {
+                                        div()
+                                            .text_size(px(TEXT_SECONDARY))
+                                            .text_color(rgb(colors.muted))
+                                            .truncate()
+                                            .child(if self.transport.state().is_loading() {
                                                 "Loading audio…".into()
                                             } else {
                                                 current.map_or(
                                                     "Your library is ready".into(),
                                                     |song| song.artist.clone(),
                                                 )
-                                            },
-                                        ),
+                                            }),
                                     ),
                             )
                             .when_some(current, |view, song| {
@@ -104,15 +108,15 @@ impl PlayerView {
                                     .justify_center()
                                     .cursor_pointer()
                                     .when(self.transport.queue().is_shuffled(), |view| {
-                                        view.bg(rgb(SELECTED))
+                                        view.bg(rgb(colors.selected))
                                     })
-                                    .hover(|view| view.bg(rgb(HOVER)))
+                                    .hover(move |view| view.bg(rgb(colors.hover)))
                                     .child(icon(
                                         "shuffle",
                                         if self.transport.queue().is_shuffled() {
-                                            ACCENT
+                                            colors.accent
                                         } else {
-                                            MUTED
+                                            colors.muted
                                         },
                                     ))
                                     .tooltip({
@@ -140,7 +144,10 @@ impl PlayerView {
                                     .items_center()
                                     .justify_center()
                                     .cursor_pointer()
-                                    .child(icon("previous", if enabled { TEXT } else { MUTED }))
+                                    .child(icon(
+                                        "previous",
+                                        if enabled { colors.text } else { colors.muted },
+                                    ))
                                     .tooltip(|_, cx| {
                                         cx.new(|_| Hint::new("Previous song or restart · [")).into()
                                     })
@@ -151,7 +158,11 @@ impl PlayerView {
                                     .id("toggle")
                                     .size(px(38.))
                                     .rounded_full()
-                                    .bg(rgb(if enabled { ACCENT } else { BORDER }))
+                                    .bg(rgb(if enabled {
+                                        colors.accent
+                                    } else {
+                                        colors.border
+                                    }))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -162,7 +173,11 @@ impl PlayerView {
                                         } else {
                                             "play"
                                         },
-                                        if enabled { ON_ACCENT } else { MUTED },
+                                        if enabled {
+                                            colors.on_accent
+                                        } else {
+                                            colors.muted
+                                        },
                                         20.,
                                     ))
                                     .tooltip({
@@ -190,7 +205,10 @@ impl PlayerView {
                                     .items_center()
                                     .justify_center()
                                     .cursor_pointer()
-                                    .child(icon("next", if enabled { TEXT } else { MUTED }))
+                                    .child(icon(
+                                        "next",
+                                        if enabled { colors.text } else { colors.muted },
+                                    ))
                                     .tooltip(|_, cx| cx.new(|_| Hint::new("Next song · ]")).into())
                                     .on_click(cx.listener(|this, _, _, cx| this.next(cx))),
                             ),
@@ -210,14 +228,14 @@ impl PlayerView {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .hover(|view| view.bg(rgb(HOVER)))
+                                    .hover(move |view| view.bg(rgb(colors.hover)))
                                     .child(icon(
                                         if self.settings.value().volume == 0. {
                                             "volume-muted"
                                         } else {
                                             "volume"
                                         },
-                                        MUTED,
+                                        colors.muted,
                                     ))
                                     .tooltip({
                                         let muted = self.settings.value().volume == 0.;
@@ -231,12 +249,16 @@ impl PlayerView {
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
                             )
                             .child(div().w(px(76.)).child(self.volume_slider.clone()))
-                            .child(div().w(px(36.)).text_xs().text_color(rgb(MUTED)).child(
-                                format!(
-                                    "{}%",
-                                    (self.settings.value().volume * 100.).round() as u32
-                                ),
-                            )),
+                            .child(
+                                div()
+                                    .w(px(36.))
+                                    .text_size(px(TEXT_CAPTION))
+                                    .text_color(rgb(colors.muted))
+                                    .child(format!(
+                                        "{}%",
+                                        (self.settings.value().volume * 100.).round() as u32
+                                    )),
+                            ),
                     ),
             )
             .child(
@@ -249,17 +271,17 @@ impl PlayerView {
                     .child(
                         div()
                             .w(px(34.))
-                            .text_xs()
-                            .text_color(rgb(MUTED))
+                            .text_size(px(TEXT_CAPTION))
+                            .text_color(rgb(colors.muted))
                             .child(time_label(position)),
                     )
                     .child(div().flex_1().min_w_0().child(self.seek_slider.clone()))
                     .child(
                         div()
                             .w(px(34.))
-                            .text_xs()
+                            .text_size(px(TEXT_CAPTION))
                             .text_right()
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(colors.muted))
                             .child(time_label(duration)),
                     ),
             )
