@@ -104,18 +104,6 @@ impl PlayerView {
                         .on_click(cx.listener(|this, _, _, cx| this.load_more(cx))),
                 )
             })
-            .child(
-                div()
-                    .id("status-help")
-                    .flex_shrink_0()
-                    .cursor_pointer()
-                    .child("? Shortcuts")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_help = true;
-                        window.focus(&this.library_focus);
-                        cx.notify();
-                    })),
-            )
             .into_any_element()
     }
 }

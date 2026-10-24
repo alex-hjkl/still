@@ -19,17 +19,28 @@ use crate::{
     requests::Requests,
     settings::{SavedFolder, Section, Settings},
     slider::{CommitMode, Slider, SliderEvent},
-    theme::{Palette, TEXT_BODY, TEXT_CAPTION, TEXT_SECONDARY, Theme},
+    theme::{Palette, TEXT_BODY, TEXT_CAPTION, TEXT_SECONDARY, ThemePreference},
 };
 use gpui::{
     Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, ScrollStrategy,
     SharedString, Subscription, UniformListScrollHandle, Window, WindowBounds, div, prelude::*, px,
-    relative, rgb, svg, uniform_list,
+    relative, rgb, uniform_list,
 };
 use std::{sync::Arc, time::Duration};
 
+#[path = "ui_components.rs"]
+mod components;
+use components::{
+    Hint, button, count_label, empty_state, icon, icon_sized, row_play_button, toolbar_button,
+    toolbar_icon, track_row, wordmark,
+};
 #[path = "connection_screen.rs"]
 mod connection_screen;
+#[path = "theme_picker.rs"]
+mod theme_picker;
+use theme_picker::ThemeMenu;
+#[path = "demo.rs"]
+mod demo;
 #[path = "folder_columns.rs"]
 mod folder_columns;
 #[path = "keyboard_help.rs"]
@@ -51,125 +62,6 @@ mod status_bar;
 // Single-line labels use truncate(), which also disables wrapping. In GPUI 0.2.2,
 // text_ellipsis() alone can reuse shortened text runs during wrapped layout and
 // split a UTF-8 character on a later measurement.
-
-fn icon_sized(name: &'static str, color: u32, edge: f32) -> gpui::Svg {
-    svg()
-        .path(name)
-        .size(px(edge))
-        .flex_shrink_0()
-        .text_color(rgb(color))
-}
-
-fn icon(name: &'static str, color: u32) -> gpui::Svg {
-    icon_sized(name, color, 20.)
-}
-
-fn wordmark(size: f32) -> gpui::Div {
-    div()
-        .relative()
-        // Optical center of "Still" in the bundled Source Sans 3 Medium.
-        .top(px(size * 0.012))
-        .text_size(px(size))
-        .line_height(px(size))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .child("Still")
-}
-
-fn button(
-    colors: Palette,
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .px_4()
-        .py_2()
-        .rounded_md()
-        .bg(rgb(colors.hover))
-        .text_color(rgb(colors.text))
-        .cursor_pointer()
-        .child(label.into())
-}
-
-fn toolbar_icon(
-    colors: Palette,
-    id: &'static str,
-    glyph: &'static str,
-    hint: &'static str,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(32.))
-        .flex_shrink_0()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(move |view| view.bg(rgb(colors.hover)))
-        .child(icon(glyph, colors.muted))
-        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-}
-
-fn row_play_button(
-    colors: Palette,
-    id: SharedString,
-    hint: &'static str,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(28.))
-        .flex_shrink_0()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(move |view| view.bg(rgb(colors.hover)))
-        .child(icon_sized("play", colors.muted, 16.))
-        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-}
-
-struct Hint(SharedString);
-
-impl Hint {
-    fn new(text: impl Into<SharedString>) -> Self {
-        Self(text.into())
-    }
-}
-
-impl Render for Hint {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = crate::theme::colors(cx);
-        div()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(rgb(colors.tooltip_bg))
-            .text_color(rgb(colors.tooltip_text))
-            .text_size(px(TEXT_SECONDARY))
-            .child(self.0.clone())
-    }
-}
-
-fn track_row(colors: Palette, id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .w_full()
-        .h(px(height))
-        .flex()
-        .items_center()
-        .gap_4()
-        .px_3()
-        .border_b_1()
-        .border_color(rgb(colors.border))
-        .cursor_pointer()
-        .hover(move |s| s.bg(rgb(colors.panel)))
-}
 
 #[derive(Clone)]
 enum FailureTarget {
@@ -197,6 +89,7 @@ pub struct PlayerView {
     folder_parent_scroll: UniformListScrollHandle,
     folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
+    theme_menu: Option<ThemeMenu>,
     seek_slider: Entity<Slider>,
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
@@ -250,6 +143,12 @@ impl PlayerView {
             .any(|name| std::env::var_os(name).is_some());
         let connection = cx.new(|_| ConnectionController::new(environment_connection));
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.observe_window_appearance(window, |this, _, cx| {
+            this.settings
+                .value()
+                .theme
+                .follow_appearance(cx.window_appearance(), cx);
+        }));
         subscriptions.push(cx.subscribe(&connection, |this, _, event, cx| {
             match event {
                 ConnectionEvent::Restored(connection) => {
@@ -292,6 +191,10 @@ impl PlayerView {
             }
         }));
         subscriptions.push(cx.observe_window_activation(window, |this, _, cx| {
+            this.settings
+                .value()
+                .theme
+                .follow_appearance(cx.window_appearance(), cx);
             this.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
             this.volume_slider
                 .update(cx, |slider, cx| slider.cancel(cx));
@@ -394,6 +297,7 @@ impl PlayerView {
             folder_parent_scroll: UniformListScrollHandle::new(),
             folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
+            theme_menu: None,
             seek_slider,
             volume_slider,
             unmuted_volume: if initial_volume > 0. {
@@ -1130,6 +1034,9 @@ impl PlayerView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.theme_menu.is_some() {
+            return;
+        }
         let editing = self.filter.focus_handle(cx).is_focused(window);
         let Some(command) = self.keys.command_in_context(&event.keystroke, editing) else {
             return;
@@ -1271,89 +1178,10 @@ impl PlayerView {
         cx.notify();
     }
 
-    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let theme = self.settings.value().theme.toggled();
-        self.settings.update(|value| value.theme = theme);
-        theme.apply(cx);
-        cx.notify();
-    }
-
-    fn theme_toggle(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let colors = crate::theme::colors(cx);
-        let glyph = match self.settings.value().theme {
-            Theme::Latte => "moon",
-            Theme::Macchiato => "sun",
-        };
-        toolbar_icon(
-            colors,
-            "toggle-theme",
-            glyph,
-            "Latte / Macchiato · Switch theme",
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx)))
-    }
-
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.settings
             .update(|value| value.sidebar_compact = !value.sidebar_compact);
         cx.notify();
-    }
-
-    fn load_demo_page(&mut self) {
-        self.browser.invalidate_requests();
-        let mut data = match self.browser.state().page.clone() {
-            Page::Artists => LibraryData::Artists(demo_artists()),
-            Page::Albums => LibraryData::Albums(demo_albums()),
-            Page::Artist(artist) => LibraryData::Albums(
-                demo_albums()
-                    .into_iter()
-                    .filter(|album| album.artist == artist.name)
-                    .collect(),
-            ),
-            Page::Songs => LibraryData::Songs(
-                demo_albums()
-                    .into_iter()
-                    .flat_map(|album| album.song)
-                    .collect(),
-            ),
-            Page::Liked => LibraryData::Songs(
-                self.likes.merge_liked(
-                    demo_albums()
-                        .into_iter()
-                        .flat_map(|album| album.song)
-                        .filter(|song| song.starred.is_some())
-                        .collect(),
-                ),
-            ),
-            Page::Album(album) => LibraryData::Album(
-                demo_albums()
-                    .into_iter()
-                    .find(|candidate| candidate.id == album.id)
-                    .unwrap_or(album),
-            ),
-            Page::Folder(_) => {
-                if self.browser.use_cached_folders() {
-                    return;
-                }
-                let songs = demo_albums()
-                    .into_iter()
-                    .flat_map(|album| {
-                        album.song.into_iter().map(move |mut song| {
-                            song.path = Some(format!(
-                                "/music/{}/{} - {}.flac",
-                                album.name, song.track, song.title
-                            ));
-                            song
-                        })
-                    })
-                    .collect();
-                LibraryData::Folders(FolderLibrary::from_songs(songs).expect("valid demo paths"))
-            }
-        };
-        if let LibraryData::Albums(albums) = &mut data {
-            crate::api::sort_albums(albums);
-        }
-        self.browser.apply(data, false);
     }
 }
 
@@ -1378,7 +1206,9 @@ impl Render for PlayerView {
             .text_size(px(TEXT_BODY))
             .font_family("Source Sans 3")
             .flex()
-            .flex_col();
+            .flex_col()
+            .track_focus(&self.library_focus)
+            .on_key_down(cx.listener(Self::theme_menu_key_down));
         if let Some(warning) = self.settings.warning() {
             root = root.child(
                 div()
@@ -1392,20 +1222,24 @@ impl Render for PlayerView {
             );
         }
         if !connected {
-            return root.child(self.connection_screen(cx)).child(
-                div()
-                    .absolute()
-                    .top(px(16.))
-                    .right(px(16.))
-                    .child(self.theme_toggle(cx)),
-            );
+            return root
+                .child(self.connection_screen(cx))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(16.))
+                        .right(px(16.))
+                        .child(self.theme_toggle(cx)),
+                )
+                .when(self.theme_menu.is_some(), |root| {
+                    root.child(self.theme_overlay(false, cx))
+                });
         }
         if self.focus_library {
             window.focus(&self.library_focus);
             self.focus_library = false;
         }
         root = root
-            .track_focus(&self.library_focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .on_mouse_down(
@@ -1461,7 +1295,10 @@ impl Render for PlayerView {
                         view.child(self.help_overlay(window, cx))
                     }),
             )
-            .child(self.player_bar(cx));
+            .child(self.player_bar(cx))
+            .when(self.theme_menu.is_some(), |root| {
+                root.child(self.theme_overlay(true, cx))
+            });
         #[cfg(feature = "ui-tests")]
         {
             root = root.when_some(
@@ -1471,99 +1308,4 @@ impl Render for PlayerView {
         }
         root
     }
-}
-
-fn count_label(count: usize, noun: &str) -> String {
-    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
-}
-
-fn empty_state(colors: Palette, message: &str, query: &str) -> gpui::AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .text_color(rgb(colors.muted))
-        .child(
-            svg()
-                .path("songs")
-                .size(px(32.))
-                .text_color(rgb(colors.artwork_icon)),
-        )
-        .child(if query.is_empty() {
-            message.to_owned()
-        } else {
-            "No matches in the loaded list".into()
-        })
-        .into_any_element()
-}
-
-fn demo_artists() -> Vec<Artist> {
-    [
-        ("1", "Nils Frahm", 3),
-        ("2", "Ólafur Arnalds", 2),
-        ("3", "Hania Rani", 2),
-        ("4", "Ryuichi Sakamoto", 2),
-        ("5", "Max Richter", 1),
-    ]
-    .into_iter()
-    .map(|(id, name, album_count)| Artist {
-        id: id.into(),
-        name: name.into(),
-        album_count,
-    })
-    .collect()
-}
-
-fn demo_albums() -> Vec<Album> {
-    [
-        ("Spaces", "Nils Frahm", 2013),
-        ("All Melody", "Nils Frahm", 2018),
-        ("Music for Animals", "Nils Frahm", 2022),
-        ("re:member", "Ólafur Arnalds", 2018),
-        ("some kind of peace", "Ólafur Arnalds", 2020),
-        ("Esja", "Hania Rani", 2019),
-        ("Ghosts", "Hania Rani", 2023),
-        ("async", "Ryuichi Sakamoto", 2017),
-        ("12", "Ryuichi Sakamoto", 2023),
-        ("The Blue Notebooks", "Max Richter", 2004),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(index, (name, artist, year))| {
-        let songs = [
-            "Opening",
-            "A quiet morning",
-            "Drift",
-            "Somewhere",
-            "Still here",
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(track, title)| Song {
-            id: format!("demo-{index}-{track}"),
-            title: title.into(),
-            artist: artist.into(),
-            album: name.into(),
-            duration: 180 + track as u64 * 23,
-            track: track as u32 + 1,
-            disc_number: 1,
-            cover_art: None,
-            path: None,
-            starred: (index == 0 && track < 2).then(|| "2026-10-15T12:00:00Z".into()),
-        })
-        .collect();
-        Album {
-            id: format!("demo-{index}"),
-            name: name.into(),
-            artist: artist.into(),
-            year: Some(year),
-            song_count: 5,
-            cover_art: None,
-            song: songs,
-        }
-    })
-    .collect()
 }

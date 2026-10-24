@@ -12,6 +12,7 @@ const ICONS: &[(&str, &[u8])] = &[
         "brand-ripples",
         include_bytes!("../assets/app-icon/still-ripples.svg"),
     ),
+    ("monitor", include_bytes!("../assets/icons/monitor.svg")),
     ("sun", include_bytes!("../assets/icons/sun.svg")),
     ("moon", include_bytes!("../assets/icons/moon.svg")),
     ("artists", include_bytes!("../assets/icons/artists.svg")),

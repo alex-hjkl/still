@@ -31,9 +31,15 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--automated", action="store_true", help="Run native UI assertions, restart restoration, and connection form checks without manual input")
     mode.add_argument("--record-demo", type=Path, metavar="DIRECTORY", help="Record a synthetic keyboard demo as GIF and MP4")
+    parser.add_argument("--connection-only", action="store_true", help="With --automated, run only the connection / input scenario")
+    parser.add_argument("--repeat", type=int, choices=range(1, 11), default=1, help="Number of isolated connection launches with --connection-only")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--size", type=int, nargs=2, metavar=("WIDTH", "HEIGHT"), help="Initial isolated window size")
     args = parser.parse_args()
+    if (args.connection_only or args.repeat != 1) and not args.automated:
+        parser.error("Connection stress checks require --automated")
+    if args.repeat != 1 and not args.connection_only:
+        parser.error("--repeat requires --connection-only")
     if sys.platform != "darwin":
         parser.error("This native smoke check requires macOS")
     if not args.app.is_dir():
@@ -191,17 +197,20 @@ def main():
             env.pop(key, None)
         env.update(NAVIDROME_URL=f"http://127.0.0.1:{server.server_port}",
                    STILL_CONFIG_DIR=str(root / "config"), STILL_LOG_DIR=str(root / "logs"))
-        if args.size:
-            (root / "config").mkdir()
-            preferences = dict(window_size=args.size)
+        if args.size or args.automated:
+            (root / "config").mkdir(exist_ok=True)
+            preferences = dict(theme="system" if args.connection_only else "latte") if scripted else {}
+            if args.size:
+                preferences["window_size"] = args.size
             if args.record_demo is not None:
                 preferences.update(sidebar_compact=False, last_section="albums")
             (root / "config/preferences.json").write_text(json.dumps(preferences))
         if args.case != "connection":
             env.update(NAVIDROME_USERNAME="fixture", NAVIDROME_PASSWORD="fixture")
         try:
-            launches = 3 if args.automated else (2 if args.relaunch else 1)
+            launches = args.repeat if args.connection_only else (3 if args.automated else (2 if args.relaunch else 1))
             for launch in range(launches):
+                scenario_index = 2 if args.connection_only else launch
                 methods.clear()
                 if scripted:
                     script = root / f"ui-script-{launch}.json"
@@ -211,10 +220,10 @@ def main():
                         env["STILL_DEMO_CAPTURE"] = str(root)
                     else:
                         from ui_scenarios import scenario
-                        steps = scenario(launch, tracks)
+                        steps = scenario(scenario_index, tracks)
                     script.write_text(json.dumps(steps, ensure_ascii=False))
                     env.update(STILL_UI_TEST_SCRIPT=str(script), STILL_UI_TEST_RESULT=str(root / f"ui-result-{launch}.json"))
-                    if launch == 2:
+                    if scenario_index == 2:
                         env.pop("NAVIDROME_USERNAME", None)
                         env.pop("NAVIDROME_PASSWORD", None)
                 with (root / "app.log").open("ab") as log:
@@ -239,9 +248,11 @@ def main():
                     result = json.loads((root / f"ui-result-{launch}.json").read_text())
                     if not result["success"]:
                         raise RuntimeError(result["error"])
-                    if args.automated and launch == 1:
+                    if args.automated and not args.connection_only and launch == 1:
                         if methods[:2] != ["ping", "search3"] or "getArtists" in methods:
                             raise RuntimeError("Restoring Folders must not load Artists")
+                    if args.automated and scenario_index == 2 and methods.count("ping") != 2:
+                        raise RuntimeError("Connection inputs must reach both fixture login responses")
                     print(json.dumps(dict(uiAssertions="passed", steps=result["steps"], launch=launch + 1)), flush=True)
                 diagnostic_log = root / "logs/still.log"
                 if diagnostic_log.exists():

@@ -86,6 +86,23 @@ impl PlayerView {
             }
             _ => self.title(),
         };
+        let stacked = f32::from(window.viewport_size().width) - self.sidebar_width() < 700.;
+        #[cfg(feature = "ui-tests")]
+        {
+            self.ui_probe.borrow_mut().header_stacked = stacked;
+        }
+        let search = || {
+            div()
+                .id("find-in-list")
+                .min_w_0()
+                .when(stacked, |view| view.w_full())
+                .when(!stacked, |view| view.w(px(220.)).flex_shrink_0())
+                .tooltip(|_, cx| {
+                    cx.new(|_| Hint::new("Find in loaded items · / or ⌘F"))
+                        .into()
+                })
+                .child(self.filter.clone())
+        };
         div()
             .flex_shrink_0()
             .flex()
@@ -192,18 +209,9 @@ impl PlayerView {
                             )
                         },
                     )
-                    .child(
-                        div()
-                            .id("find-in-list")
-                            .w(px(220.))
-                            .flex_shrink_0()
-                            .tooltip(|_, cx| {
-                                cx.new(|_| Hint::new("Find in loaded items · / or ⌘F"))
-                                    .into()
-                            })
-                            .child(self.filter.clone()),
-                    ),
+                    .when(!stacked, |row| row.child(search())),
             )
+            .when(stacked, |header| header.child(search()))
             .into_any_element()
     }
 
@@ -239,7 +247,7 @@ impl PlayerView {
                             .gap_4()
                             .px_3()
                             .border_b_1()
-                            .border_color(rgb(colors.border))
+                            .border_color(rgb(colors.row_border))
                             .cursor_pointer()
                             .hover(move |s| s.bg(rgb(colors.panel)))
                             .when(this.cursor_on(row), |view| {
@@ -333,7 +341,7 @@ impl PlayerView {
                             .gap_4()
                             .px_3()
                             .border_b_1()
-                            .border_color(rgb(colors.border))
+                            .border_color(rgb(colors.row_border))
                             .cursor_pointer()
                             .hover(move |s| s.bg(rgb(colors.panel)))
                             .when(this.cursor_on(row), |view| {

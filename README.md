@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
 - Control playback with macOS media keys and Now Playing.
 - Find within loaded lists and switch between compact and expanded sidebars.
 - Switch between [Catppuccin](https://catppuccin.com/palette/) Latte (light) and
-  Macchiato (dark) with the sun / moon button; your choice is saved.
+  Macchiato (dark) in the appearance menu, or follow the system theme. Your choice is saved.
 
 ## Run
 
@@ -114,7 +114,7 @@ On Linux, preferences use `$XDG_CONFIG_HOME/still` (default `~/.config/still`)
 and logs use `$XDG_STATE_HOME/still/logs` (default `~/.local/state/still/logs`).
 On Windows, they use `%APPDATA%\Still` and `%LOCALAPPDATA%\Still\logs` respectively.
 
-Volume, shuffle, sidebar mode, window size, last section and folder selection are
+Theme, volume, shuffle, sidebar mode, window size, last section and folder selection are
 restored between sessions. Connection credentials are stored separately in Keychain.
 
 ## Development

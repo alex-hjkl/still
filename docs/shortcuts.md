@@ -36,3 +36,7 @@ The play/pause indicator identifies the current song independently. Clearing Fin
 with the × button keeps focus in the field. Drag the timeline to preview a position
 and release to seek. Drag volume for continuous adjustment; click the speaker to
 mute and restore the previous level within the session.
+
+The appearance button opens System, Latte and Macchiato choices. Use j / k,
+Up / Down or Tab / Shift+Tab to move, Enter to apply and Esc to cancel. Closing
+this menu restores the previously focused field.

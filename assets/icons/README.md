@@ -8,6 +8,7 @@ Icons are embedded at compile time; no runtime download or icon font is used.
 
 | App name | Upstream asset |
 | --- | --- |
+| `monitor` | `assets/regular/monitor.svg` |
 | `sun` | `assets/regular/sun.svg` |
 | `moon` | `assets/regular/moon.svg` |
 | `artists` | `assets/regular/microphone-stage.svg` |

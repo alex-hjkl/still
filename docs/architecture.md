@@ -17,14 +17,22 @@ where practical; views adapt user input and asynchronous results to those models
 - `connection.rs`: connection controller owning authentication, credential persistence,
   operation identities and connection failures. It emits connection events for the view.
   `credentials.rs` adapts the system credential store.
-- `theme.rs`: Catppuccin Latte / Macchiato semantic palettes and the active GPUI
-  global. The saved `theme` preference defaults to Latte for older settings.
-  Switching refreshes all windows so independent inputs, sliders and tooltips
-  repaint with the same palette. On macOS it also sets the app’s native Aqua /
-  Dark Aqua appearance so title bars and system menus match.
+- `theme.rs`: Catppuccin Latte / Macchiato palettes and a separate saved
+  `ThemePreference` (System / Latte / Macchiato). New preferences follow the OS;
+  existing explicit palette choices are preserved. The active GPUI global contains
+  only the resolved palette. System mode observes window appearance changes;
+  manual modes ignore them. Appearance callbacks read the current platform value
+  rather than GPUI’s cached window value; activation also rechecks background changes.
+  On macOS, System clears the native AppKit appearance
+  override while manual choices set Aqua / Dark Aqua. Refreshes include independent
+  inputs, sliders and tooltips.
 - `settings.rs`, `diagnostics.rs`: background preferences persistence and diagnostics.
 - `slider.rs`: reusable GPUI slider with pointer state and preview/change events.
 - `ui.rs`: application view, navigation and coordination of controllers.
+- `ui_components.rs`: shared buttons, icons, tooltips, rows and empty states.
+- `demo.rs`: local demo records and loading without a Navidrome server.
+- `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
+  previous focus when its menu closes.
 - `library_view.rs`, `sidebar.rs`: library lists, headers and sidebar rendering.
 - `connection_screen.rs`, `folder_columns.rs`, `player_bar.rs`, `keyboard_help.rs`:
   screen rendering and view-specific interactions.
@@ -76,7 +84,13 @@ Preference warnings are rendered separately from library/playback failures.
 ## Verification boundaries
 
 Unit tests cover domain behavior and local HTTP fixtures. Native tests cover real
-GPUI layout, keyboard dispatch, restarts and macOS media command dispatchers. They
+GPUI layout, keyboard dispatch, restarts and macOS media command dispatchers.
+Text steps wait for two stable completed paint frames with the intended input
+focused before using the platform input handler. They reject unhandled input and
+changes to any non-target field. The connection scenario exercises consecutive
+Tab / text steps and verifies fixture input values without recording actual field
+contents. System-theme notifications are simulated through the same resolver used
+by the window observer; tests do not change the host OS theme. They
 do not prove that every hardware media keyboard works, that every audio codec can
 seek, or that untested platforms run successfully. Mouse controls also need the
 manual checks documented in `scripts/README.md`.

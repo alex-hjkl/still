@@ -1,7 +1,7 @@
 //! Native UI regression driver, compiled only with --features ui-tests.
 //! Keystrokes use GPUI's dispatch path; assertions run after a rendered frame.
 use super::*;
-use crate::player::PlaybackStatus;
+use crate::{player::PlaybackStatus, theme::Theme};
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,6 +16,8 @@ use std::{
 #[derive(Default, Clone, Serialize)]
 pub(super) struct RenderProbe {
     pub theme_bg: u32,
+    pub header_stacked: bool,
+    pub theme_menu_fits: Option<bool>,
     pub connection_fits: Option<bool>,
     pub columns: BTreeMap<String, String>,
     pub failures: Vec<String>,
@@ -32,6 +34,14 @@ pub(super) struct RenderProbe {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Step {
     ToggleTheme,
+    SetTheme {
+        preference: ThemePreference,
+    },
+    SystemAppearance {
+        dark: bool,
+    },
+    ThemeMenu,
+
     Wait {
         milliseconds: u64,
     },
@@ -50,6 +60,7 @@ enum Step {
     },
     Text {
         text: String,
+        field: Option<String>,
     },
     Resize {
         size: [f32; 2],
@@ -128,6 +139,13 @@ pub(super) fn demo_overlay(colors: Palette, hint: Option<&DemoHint>) -> Option<g
 #[derive(Default, Deserialize, Serialize)]
 struct Expected {
     theme: Option<Theme>,
+    theme_preference: Option<ThemePreference>,
+    system_theme_matches: Option<bool>,
+    header_stacked: Option<bool>,
+    theme_menu: Option<bool>,
+    theme_menu_fits: Option<bool>,
+    input_values: Option<BTreeMap<String, String>>,
+    server_unchanged: Option<bool>,
     theme_bg: Option<u32>,
     connection_fits: Option<bool>,
     connection_scroll_y: Option<f32>,
@@ -170,6 +188,10 @@ struct Expected {
 #[derive(Serialize)]
 struct Snapshot {
     theme: Theme,
+    theme_preference: ThemePreference,
+    system_theme_matches: bool,
+    theme_menu: bool,
+    server_unchanged: bool,
     connection_scroll_max: f32,
     connection_scroll_y: f32,
     connected: bool,
@@ -232,7 +254,13 @@ impl Snapshot {
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         Self {
-            theme: view.settings.value().theme,
+            theme: *cx.global::<Theme>(),
+            theme_preference: view.settings.value().theme,
+            system_theme_matches: *cx.global::<Theme>()
+                == ThemePreference::System.resolve(cx.window_appearance()),
+            theme_menu: view.theme_menu.is_some(),
+            server_unchanged: std::env::var("NAVIDROME_URL")
+                .is_ok_and(|url| view.server.read(cx).value() == url),
             connection_scroll_max: f32::from(view.connection_scroll.max_offset().height),
             connection_scroll_y: f32::from(view.connection_scroll.offset().y),
             playback: match view.transport.state().status {
@@ -310,6 +338,16 @@ impl Snapshot {
             };
         }
         field!(theme)
+            && field!(theme_preference)
+            && field!(system_theme_matches)
+            && field!(theme_menu)
+            && expected
+                .theme_menu_fits
+                .is_none_or(|fits| self.rendered.theme_menu_fits == Some(fits))
+            && field!(server_unchanged)
+            && expected
+                .header_stacked
+                .is_none_or(|value| self.rendered.header_stacked == value)
             && expected
                 .theme_bg
                 .is_none_or(|bg| self.rendered.theme_bg == bg)
@@ -404,6 +442,8 @@ struct Run {
     passed: usize,
     snapshots: Vec<Snapshot>,
     waiting_since: Instant,
+    painted_focus: Option<FocusHandle>,
+    stable_focus_frames: usize,
 }
 
 impl Run {
@@ -420,6 +460,28 @@ impl Run {
     fn step(&mut self, window: &mut Window, cx: &mut gpui::App) -> Result<bool> {
         let step = self.steps.front().context("UI script must end with quit")?;
         match step {
+            Step::SetTheme { preference } => {
+                self.view
+                    .update(cx, |view, cx| view.set_theme(*preference, cx));
+            }
+            Step::SystemAppearance { dark } => {
+                let appearance = if *dark {
+                    gpui::WindowAppearance::Dark
+                } else {
+                    gpui::WindowAppearance::Light
+                };
+                self.view
+                    .read(cx)
+                    .settings
+                    .value()
+                    .theme
+                    .follow_appearance(appearance, cx);
+            }
+            Step::ThemeMenu => {
+                self.view.update(cx, |view, cx| {
+                    view.open_theme_menu(window, cx);
+                });
+            }
             Step::ToggleTheme => {
                 self.view.update(cx, |view, cx| view.toggle_theme(cx));
             }
@@ -464,16 +526,55 @@ impl Run {
                     window.dispatch_keystroke(gpui::Keystroke::parse(key)?, cx);
                 }
             }
-            Step::Text { text } => {
+            Step::Text { text, field } => {
+                let view = self.view.read(cx);
+                let inputs = [
+                    (&view.server, "server"),
+                    (&view.username, "username"),
+                    (&view.password, "password"),
+                    (&view.filter, "filter"),
+                ];
+                let focused = inputs
+                    .iter()
+                    .find(|(input, _)| input.focus_handle(cx).is_focused(window));
+                // Logical focus can change before the platform IME handler is
+                // installed by paint. Require two completed, stable focus frames.
+                let ready = self.stable_focus_frames >= 2
+                    && focused.is_some_and(|(_, name)| {
+                        field.as_deref().is_none_or(|expected| expected == *name)
+                    });
+                if !ready {
+                    if self.waiting_since.elapsed() > Duration::from_secs(3) {
+                        bail!(
+                            "Text input is not ready: expected field {:?}, focused {:?}, stable painted frames {}",
+                            field,
+                            focused.map(|(_, name)| name),
+                            self.stable_focus_frames
+                        );
+                    }
+                    return Ok(true);
+                }
+                let target = focused.expect("ready focused input").1;
+                let before: Vec<_> = inputs
+                    .iter()
+                    .map(|(input, name)| ((*input).clone(), *name, input.read(cx).value()))
+                    .collect();
                 for character in text.chars() {
-                    window.dispatch_keystroke(
+                    if !window.dispatch_keystroke(
                         gpui::Keystroke {
                             key: character.to_string(),
                             key_char: Some(character.to_string()),
                             ..Default::default()
                         },
                         cx,
-                    );
+                    ) {
+                        bail!("Text dispatch was not accepted by field {target}");
+                    }
+                }
+                for (input, name, value) in before {
+                    if name != target && input.read(cx).value() != value {
+                        bail!("Text was routed to {name} while {target} had focus");
+                    }
                 }
             }
             Step::Resize { size } => window.resize(gpui::size(px(size[0]), px(size[1]))),
@@ -521,7 +622,20 @@ impl Run {
             Step::Disconnect => self.view.update(cx, |view, cx| view.disconnect(window, cx)),
             Step::Expect { expected } => {
                 let snapshot = Snapshot::read(self.view.read(cx), window, cx);
-                if !snapshot.matches(expected) {
+                let inputs_match = expected.input_values.as_ref().is_none_or(|values| {
+                    let view = self.view.read(cx);
+                    values.iter().all(|(name, value)| {
+                        let input = match name.as_str() {
+                            "server" => &view.server,
+                            "username" => &view.username,
+                            "password" => &view.password,
+                            "filter" => &view.filter,
+                            _ => return false,
+                        };
+                        input.read(cx).value() == *value
+                    })
+                });
+                if !snapshot.matches(expected) || !inputs_match {
                     if self.waiting_since.elapsed() > Duration::from_secs(12) {
                         bail!(
                             "Step {}: expected {}; observed {}",
@@ -559,13 +673,22 @@ fn schedule(run: Rc<RefCell<Run>>, window: &mut Window, cx: &mut gpui::App) {
                     .await;
                 let keep_running = cx
                     .update(|window, cx| {
+                        let focus_before = window.focused(cx);
                         window.refresh();
                         window.draw(cx).clear();
-                        let result = run.borrow_mut().step(window, cx);
+                        let focus_after = window.focused(cx);
+                        let mut run = run.borrow_mut();
+                        if focus_before == focus_after && run.painted_focus == focus_after {
+                            run.stable_focus_frames += 1;
+                        } else {
+                            run.stable_focus_frames = 0;
+                        }
+                        run.painted_focus = focus_after;
+                        let result = run.step(window, cx);
                         match result {
                             Ok(keep_running) => keep_running,
                             Err(error) => {
-                                run.borrow().finish(false, Some(format!("{error:#}")));
+                                run.finish(false, Some(format!("{error:#}")));
                                 cx.quit();
                                 false
                             }
@@ -599,6 +722,8 @@ pub(crate) fn start_ui_test(view: Entity<PlayerView>, window: &mut Window, cx: &
             passed: 0,
             snapshots: Vec::new(),
             waiting_since: Instant::now(),
+            painted_focus: None,
+            stable_focus_frames: 0,
         })),
         window,
         cx,

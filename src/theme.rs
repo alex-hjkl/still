@@ -1,4 +1,4 @@
-use gpui::{App, Global};
+use gpui::{App, Global, WindowAppearance};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -11,11 +11,72 @@ pub enum Theme {
 
 impl Global for Theme {}
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Latte,
+    Macchiato,
+}
+
+impl ThemePreference {
+    pub const ALL: [Self; 3] = [Self::System, Self::Latte, Self::Macchiato];
+
+    pub fn resolve(self, appearance: WindowAppearance) -> Theme {
+        match self {
+            Self::Latte => Theme::Latte,
+            Self::Macchiato => Theme::Macchiato,
+            Self::System => match appearance {
+                WindowAppearance::Dark | WindowAppearance::VibrantDark => Theme::Macchiato,
+                WindowAppearance::Light | WindowAppearance::VibrantLight => Theme::Latte,
+            },
+        }
+    }
+
+    pub fn apply(self, cx: &mut App) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::MainThreadMarker;
+            use objc2_app_kit::{
+                NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+            };
+            let main_thread =
+                MainThreadMarker::new().expect("theme changes require the main thread");
+            // Clearing the app override restores native OS appearance tracking.
+            // SAFETY: AppKit's exported appearance names are immutable strings.
+            let name = unsafe {
+                match self {
+                    Self::System => None,
+                    Self::Latte => Some(NSAppearanceNameAqua),
+                    Self::Macchiato => Some(NSAppearanceNameDarkAqua),
+                }
+            };
+            let appearance = name.and_then(NSAppearance::appearanceNamed);
+            NSApplication::sharedApplication(main_thread).setAppearance(appearance.as_deref());
+        }
+        let theme = self.resolve(cx.window_appearance());
+        cx.set_global(theme);
+        cx.refresh_windows();
+    }
+
+    pub fn follow_appearance(self, appearance: WindowAppearance, cx: &mut App) {
+        if self == Self::System {
+            let theme = self.resolve(appearance);
+            if cx.global::<Theme>() != &theme {
+                cx.set_global(theme);
+                cx.refresh_windows();
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub bg: u32,
     pub panel: u32,
     pub border: u32,
+    pub row_border: u32,
     pub text: u32,
     pub muted: u32,
     pub accent: u32,
@@ -39,37 +100,6 @@ pub struct Palette {
 }
 
 impl Theme {
-    pub fn apply(self, cx: &mut App) {
-        cx.set_global(self);
-        #[cfg(target_os = "macos")]
-        {
-            use objc2::MainThreadMarker;
-            use objc2_app_kit::{
-                NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-            };
-            let main_thread =
-                MainThreadMarker::new().expect("theme changes require the main thread");
-            // SAFETY: AppKit exports these appearance names as immutable strings.
-            let name = unsafe {
-                match self {
-                    Self::Latte => NSAppearanceNameAqua,
-                    Self::Macchiato => NSAppearanceNameDarkAqua,
-                }
-            };
-            let appearance = NSAppearance::appearanceNamed(name);
-            NSApplication::sharedApplication(main_thread).setAppearance(appearance.as_deref());
-        }
-        // Inputs, sliders and tooltips are independent entities too.
-        cx.refresh_windows();
-    }
-
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Latte => Self::Macchiato,
-            Self::Macchiato => Self::Latte,
-        }
-    }
-
     pub fn palette(self) -> Palette {
         // Catppuccin's official palette: https://github.com/catppuccin/palette
         // Blue is the shared accent; translucent selections and errors use it
@@ -79,6 +109,7 @@ impl Theme {
                 bg: 0xeff1f5,
                 panel: 0xe6e9ef,
                 border: 0xbcc0cc,
+                row_border: 0xe0e3eb,
                 text: 0x4c4f69,
                 muted: 0x5c5f77,
                 accent: 0x1e66f5,
@@ -104,6 +135,7 @@ impl Theme {
                 bg: 0x24273a,
                 panel: 0x1e2030,
                 border: 0x494d64,
+                row_border: 0x303449,
                 text: 0xcad3f5,
                 muted: 0xb8c0e0,
                 accent: 0x8aadf4,
@@ -141,6 +173,41 @@ pub const TEXT_CAPTION: f32 = 14.;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_follows_both_appearances_while_manual_choices_stay_fixed() {
+        for appearance in [
+            WindowAppearance::Light,
+            WindowAppearance::VibrantLight,
+            WindowAppearance::Dark,
+            WindowAppearance::VibrantDark,
+        ] {
+            assert_eq!(ThemePreference::Latte.resolve(appearance), Theme::Latte);
+            assert_eq!(
+                ThemePreference::Macchiato.resolve(appearance),
+                Theme::Macchiato
+            );
+            assert_eq!(
+                ThemePreference::System.resolve(appearance),
+                if matches!(
+                    appearance,
+                    WindowAppearance::Dark | WindowAppearance::VibrantDark
+                ) {
+                    Theme::Macchiato
+                } else {
+                    Theme::Latte
+                }
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<ThemePreference>("\"latte\"").unwrap(),
+            ThemePreference::Latte
+        );
+        assert_eq!(
+            serde_json::from_str::<ThemePreference>("\"macchiato\"").unwrap(),
+            ThemePreference::Macchiato
+        );
+    }
 
     fn luminance(color: u32) -> f64 {
         let channel = |shift: u32| {

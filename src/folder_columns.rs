@@ -225,7 +225,7 @@ impl PlayerView {
                                 .gap_2()
                                 .px_3()
                                 .border_b_1()
-                                .border_color(rgb(colors.border))
+                                .border_color(rgb(colors.row_border))
                                 .cursor_pointer()
                                 .when(selected == Some(row), |view| view.bg(rgb(colors.selected)))
                                 .when(column == Column::Current && this.cursor_on(row), |view| {

@@ -32,18 +32,31 @@ def scenario(launch, tracks):
                       selected=selected, visible=True, **values)
 
     if launch == 2:
-        return [dict(action="resize", size=[780, 640]),
+        stress = []
+        for index in range(8):
+            # No expectation or idle step between focus and text: the driver
+            # must synchronize the painted input handler itself.
+            stress.extend([key("tab"), key("cmd-a"), dict(action="text", field="username", text=f"focus-{index}"),
+                           key("tab"), key("cmd-a"), dict(action="text", field="password", text="fixture"),
+                           key("tab")])
+        return [expect(theme_preference="system", system_theme_matches=True),
+                dict(action="theme_menu"), expect(theme_menu=True, theme_menu_fits=True), key("escape"), expect(focus="server"),
+                dict(action="set_theme", preference="latte"),
+                dict(action="resize", size=[780, 640]),
                 expect(connected=False, connection_fits=True, theme="latte", theme_bg=0xeff1f5),
+                *stress, expect(server_unchanged=True, input_values={"username":"focus-7", "password":"fixture"}),
                 dict(action="toggle_theme"), expect(theme="macchiato", theme_bg=0x24273a, connection_fits=True),
-                key("tab"), expect(focus="username"), dict(action="text", text="invalid"),
-                key("tab"), expect(focus="password"), dict(action="text", text="fixture"),
+                key("tab"), expect(focus="username"), key("cmd-a"), dict(action="text", field="username", text="invalid"),
+                expect(server_unchanged=True, input_values={"username":"invalid"}),
+                key("tab"), expect(focus="password"), key("cmd-a"), dict(action="text", field="password", text="fixture"),
                 key("enter"), expect(connected=False, failures=["retry-connection"], connection_fits=True),
-                key("shift-tab"), key("cmd-a"), dict(action="text", text="malformed"), key("tab"),
+                key("shift-tab"), key("cmd-a"), dict(action="text", field="username", text="malformed"), key("tab"),
                 key("enter"), expect(connected=False, failures=["retry-connection"], connection_fits=False),
                 dict(action="scroll_connection", delta=-10000),
                 expect(connection_scrolled_to_bottom=True),
                 dict(action="scroll_connection", delta=10000),
                 expect(connection_scroll_y=0),
+                dict(action="set_theme", preference="system"), expect(theme_preference="system", system_theme_matches=True),
                 dict(action="quit")]
 
     restored = folder(cd2, "song-35", filter="035", preview_song="song-35",
@@ -106,10 +119,16 @@ def scenario(launch, tracks):
                 key("space"), expect(playback="playing", media_state="playing"),
                 key("space"), expect(playback="paused", media_state="paused"),
                 dict(action="disconnect"), expect(connected=False, media_title="", media_state="stopped"),
+                dict(action="set_theme", preference="system"), expect(theme_preference="system", system_theme_matches=True),
                 dict(action="quit")]
 
     return [
         expect(theme="latte", theme_bg=0xeff1f5),
+        dict(action="set_theme", preference="system"), expect(theme_preference="system", system_theme_matches=True),
+        dict(action="system_appearance", dark=True), expect(theme="macchiato", theme_bg=0x24273a),
+        dict(action="system_appearance", dark=False), expect(theme="latte", theme_bg=0xeff1f5),
+        dict(action="set_theme", preference="latte"),
+        dict(action="system_appearance", dark=True), expect(theme="latte", theme_preference="latte"),
         dict(action="toggle_theme"), expect(theme="macchiato", theme_bg=0x24273a),
         expect(connected=True, loaded=True, page="artists", sidebar_width=64, sidebar_icons=sidebar_icons()),
         dict(action="fail_connection_save"), expect(failures=["retry-connection"]),
@@ -154,12 +173,19 @@ def scenario(launch, tracks):
         dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
         key("/"), expect(focus="filter"), dict(action="text", text="035"), key("cmd-b"),
         expect(sidebar_width=208, focus="filter", filter="035", find_summary="1 of 30 loaded items"),
+        dict(action="theme_menu"), expect(theme_menu=True, theme_menu_fits=True, filter="035"),
+        key("down"), key("enter"), expect(theme_menu=False, theme_preference="system", system_theme_matches=True, focus="filter", filter="035"),
+        dict(action="theme_menu"), expect(theme_menu=True, theme_menu_fits=True),
+        key("down"), key("enter"), expect(theme_menu=False, theme_preference="latte", theme="latte", focus="filter", filter="035"),
+        dict(action="theme_menu"), key("down"), key("enter"),
+        expect(theme_menu=False, theme_preference="macchiato", theme="macchiato", focus="filter", filter="035"),
+        dict(action="theme_menu"), key("escape"), expect(theme_menu=False, focus="filter", filter="035"),
         dict(action="toggle_theme"), expect(theme="latte", focus="filter", filter="035", theme_bg=0xeff1f5),
         dict(action="toggle_theme"), expect(theme="macchiato", focus="filter", filter="035", theme_bg=0x24273a),
-        dict(action="resize", size=[780, 640]), expect(size=[780, 640], sidebar_width=208, visible=True, sidebar_icons=sidebar_icons(640), footer_fits=True),
+        dict(action="resize", size=[780, 640]), expect(size=[780, 640], sidebar_width=208, visible=True, sidebar_icons=sidebar_icons(640), footer_fits=True, header_stacked=True),
         key("cmd-b"), expect(sidebar_width=64, focus="filter", filter="035", sidebar_icons=sidebar_icons(640)),
         key("cmd-b"), expect(sidebar_width=208, focus="filter", filter="035", sidebar_icons=sidebar_icons(640)),
-        dict(action="resize", size=[1120, 760]), expect(size=[1120, 760], sidebar_width=208),
+        dict(action="resize", size=[1120, 760]), expect(size=[1120, 760], sidebar_width=208, header_stacked=False),
         key("enter"), restored,
         key("f1"), expect(show_help=True, filter="035", visible=True, columns=dict(parent=film, current=cd2), preview_song="song-35"),
         key("escape"), expect(show_help=False, filter="035", selected="song-35", visible=True),

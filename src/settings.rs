@@ -64,7 +64,7 @@ pub struct SavedFolder {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Preferences {
-    pub theme: crate::theme::Theme,
+    pub theme: crate::theme::ThemePreference,
     pub volume: f32,
     pub shuffle: bool,
     pub sidebar_compact: bool,
@@ -76,7 +76,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            theme: crate::theme::Theme::default(),
+            theme: crate::theme::ThemePreference::default(),
             volume: 0.7,
             shuffle: false,
             sidebar_compact: true,
@@ -479,7 +479,7 @@ mod tests {
         };
         let mut settings = Settings::new(store.load().unwrap(), store.clone());
         settings.update(|value| {
-            value.theme = crate::theme::Theme::Macchiato;
+            value.theme = crate::theme::ThemePreference::Macchiato;
             value.volume = 0.35;
             value.shuffle = true;
             value.sidebar_compact = false;
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(store.load().unwrap(), *settings.value());
         drop(settings);
         let restored = store.load().unwrap();
-        assert_eq!(restored.theme, crate::theme::Theme::Macchiato);
+        assert_eq!(restored.theme, crate::theme::ThemePreference::Macchiato);
         assert_eq!(restored.volume, 0.35);
         assert!(restored.shuffle);
         assert!(!restored.sidebar_compact);
@@ -506,7 +506,10 @@ mod tests {
         // The previous hide/show preference must never hide the sidebar now.
         fs::write(&store.path, br#"{"sidebar_visible":false}"#).unwrap();
         assert!(store.load().unwrap().sidebar_compact);
-        assert_eq!(store.load().unwrap().theme, crate::theme::Theme::Latte);
+        assert_eq!(
+            store.load().unwrap().theme,
+            crate::theme::ThemePreference::System
+        );
         fs::write(&store.path, b"broken JSON").unwrap();
         assert_eq!(store.load().unwrap_or_default(), Preferences::default());
         fs::write(&store.path, br#"{"volume":5,"window_size":[-1,0]}"#).unwrap();

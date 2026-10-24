@@ -158,7 +158,17 @@ checks playback shortcuts with keyboard help open without navigating the hidden 
 and reads title, position and playback state back from MPNowPlayingInfoCenter.
 The Find count and the unchanged library columns behind the help panel are also checked.
 Theme checks cover Latte / Macchiato switching, preserving filter focus and text,
-restoring the theme after restart, and both library and connection-screen palettes.
+restoring the theme after restart, System appearance changes and manual overrides,
+keyboard selection / cancellation in the appearance menu, and both library and
+connection-screen palettes. Resizing checks keep Find focused while it moves
+between the wide header and a second row. Text steps wait for stable painted focus,
+assert the intended field and reject changes to other inputs; the connection case
+repeats rapid Tab / text sequences without idle steps. To stress that case across
+fresh processes without replaying library and audio scenarios:
+
+```sh
+python3 scripts/smoke-macos.py --automated --connection-only --repeat 5
+```
 The suite simulates an unavailable credential store without reading or writing saved
 logins, navigates to a failing library request, and retries each operation separately.
 It also checks playback Retry across navigation and verifies that restoring Folders
