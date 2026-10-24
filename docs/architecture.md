@@ -3,7 +3,7 @@
 Still is a single desktop application. Domain models are kept independent of GPUI
 where practical; views adapt user input and asynchronous results to those models.
 
-- `browser.rs`, `folders.rs`: loaded records, filtered entries, navigation history,
+- `browser.rs`, `folders.rs`: loaded records, visible entries, navigation history,
   server folder tree, selection restoration and queue inputs.
 - `api.rs`: Subsonic requests, response decoding and authentication. MD5 is used
   for the protocol's salted token, not as a general-purpose password hash.
@@ -34,6 +34,8 @@ where practical; views adapt user input and asynchronous results to those models
 - `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
   previous focus when its menu closes.
 - `library_view.rs`, `sidebar.rs`: library lists, headers and sidebar rendering.
+- `search_view.rs`: library-wide search input, debounce and mixed artist, album
+  and song results, using the same navigation and playback actions as library lists.
 - `connection_screen.rs`, `folder_columns.rs`, `player_bar.rs`, `keyboard_help.rs`:
   screen rendering and view-specific interactions.
 - `keyboard.rs`, `input.rs`: contextual commands and native Unicode/IME text input.
@@ -53,6 +55,19 @@ API requests and image loading run on GPUI's background executor. Audio uses a
 separate command worker and a Tokio runtime; blocking decoder work stays off the
 UI and async runtime threads. Request identities and playback generations prevent
 results from an old operation from replacing current state.
+
+Library search uses [search3](https://opensubsonic.netlify.app/docs/endpoints/search3/)
+with a nonempty query and up to 200 results per category. Editing waits 250 ms
+before loading, invalidates the previous request immediately and clears its results;
+Enter submits without waiting. Empty input makes no server request. Further pages
+advance all three offsets by the largest loaded category, preserving the selected
+entry as categories grow. Navigation history retains the query and loaded results.
+One header field handles all search. Typing starts a search from the current page;
+clearing returns to that page and selection while retaining input focus. `/` and
+Command+F focus the same field. Search does not change the saved last section.
+Legacy saved folder filters are ignored when reading preferences and are never
+written back. Song rows use source indices and share their song collection with
+playback; directory, artist and album rows do not enter the queue.
 
 `Arc` shares immutable loaded collections. Mutable UI state belongs to the GPUI
 entity or its controllers. The audio worker publishes snapshots through a Tokio

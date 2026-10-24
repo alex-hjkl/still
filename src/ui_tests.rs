@@ -21,7 +21,7 @@ pub(super) struct RenderProbe {
     pub connection_fits: Option<bool>,
     pub columns: BTreeMap<String, String>,
     pub failures: Vec<String>,
-    pub find_summary: String,
+    pub search_summary: String,
     pub preview_song: Option<String>,
     pub sidebar_width: f32,
     pub sidebar_icons: BTreeMap<String, [f32; 2]>,
@@ -154,14 +154,15 @@ struct Expected {
     failures: Option<Vec<String>>,
     loaded: Option<bool>,
     show_help: Option<bool>,
-    find_summary: Option<String>,
+    search_summary: Option<String>,
     volume: Option<f32>,
     shuffle: Option<bool>,
     page: Option<String>,
     path: Option<String>,
     selected: Option<String>,
     cursor: Option<usize>,
-    filter: Option<String>,
+    search: Option<String>,
+    search_counts: Option<[usize; 3]>,
     columns: Option<BTreeMap<String, String>>,
     preview_song: Option<String>,
     size: Option<[f32; 2]>,
@@ -203,7 +204,8 @@ struct Snapshot {
     path: String,
     selected: String,
     cursor: usize,
-    filter: String,
+    search: String,
+    search_counts: [usize; 3],
     rendered: RenderProbe,
     size: [f32; 2],
     visible: bool,
@@ -230,6 +232,7 @@ impl Snapshot {
             Page::Artist(_) => "artist",
             Page::Album(_) => "album",
             Page::Folder(_) => "folders",
+            Page::Search(_) => "search",
         };
         let selected = view
             .browser
@@ -289,7 +292,11 @@ impl Snapshot {
             },
             selected,
             cursor: state.cursor,
-            filter: state.filter_text.clone(),
+            search: match &state.page {
+                Page::Search(query) => query.clone(),
+                _ => String::new(),
+            },
+            search_counts: [state.artists.len(), state.albums.len(), state.songs.len()],
             rendered: view.ui_probe.borrow().clone(),
             sidebar_width: view.ui_probe.borrow().sidebar_width,
             size: [
@@ -315,7 +322,7 @@ impl Snapshot {
                 (&view.server, "server"),
                 (&view.username, "username"),
                 (&view.password, "password"),
-                (&view.filter, "filter"),
+                (&view.search, "search"),
             ]
             .into_iter()
             .find_map(|(input, name)| {
@@ -338,6 +345,7 @@ impl Snapshot {
             };
         }
         field!(theme)
+            && field!(search_counts)
             && field!(theme_preference)
             && field!(system_theme_matches)
             && field!(theme_menu)
@@ -370,9 +378,9 @@ impl Snapshot {
             && field!(loaded)
             && field!(show_help)
             && expected
-                .find_summary
+                .search_summary
                 .as_ref()
-                .is_none_or(|summary| summary == &self.rendered.find_summary)
+                .is_none_or(|summary| summary == &self.rendered.search_summary)
             && field!(shuffle)
             && expected
                 .volume
@@ -381,7 +389,7 @@ impl Snapshot {
             && field!(path)
             && field!(selected)
             && field!(cursor)
-            && field!(filter)
+            && field!(search)
             && field!(visible)
             && field!(sidebar_width)
             && expected.sidebar_icons.as_ref().is_none_or(|icons| {
@@ -532,7 +540,7 @@ impl Run {
                     (&view.server, "server"),
                     (&view.username, "username"),
                     (&view.password, "password"),
-                    (&view.filter, "filter"),
+                    (&view.search, "search"),
                 ];
                 let focused = inputs
                     .iter()
@@ -629,7 +637,7 @@ impl Run {
                             "server" => &view.server,
                             "username" => &view.username,
                             "password" => &view.password,
-                            "filter" => &view.filter,
+                            "search" => &view.search,
                             _ => return false,
                         };
                         input.read(cx).value() == *value

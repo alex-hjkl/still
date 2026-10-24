@@ -14,7 +14,7 @@ pub enum Command {
     HalfUp,
     PageDown,
     PageUp,
-    Find,
+    FocusSearch,
     Escape,
     Toggle,
     Shuffle,
@@ -85,7 +85,7 @@ impl Keys {
                 return Some(Section(index));
             }
             return match (key, m.control, m.shift) {
-                ("f", false, false) => Some(Find),
+                ("f", false, false) => Some(FocusSearch),
                 ("b", false, false) => Some(ToggleSidebar),
                 _ => None,
             };
@@ -122,7 +122,7 @@ impl Keys {
             ("end", false) | ("g", true) | ("G", _) => Last,
             ("pagedown", false) => PageDown,
             ("pageup", false) => PageUp,
-            ("/", false) => Find,
+            ("/", false) => FocusSearch,
             ("escape", _) => Escape,
             ("space" | " ", false) => Toggle,
             ("s", false) => Shuffle,
@@ -175,7 +175,7 @@ mod tests {
             ("h", Command::Back),
             ("l", Command::Open),
             ("ctrl-d", Command::HalfDown),
-            ("cmd-f", Command::Find),
+            ("cmd-f", Command::FocusSearch),
         ] {
             assert_eq!(keys.command(&key(stroke)), Some(expected));
         }
@@ -230,7 +230,7 @@ mod tests {
         );
         assert_eq!(
             keys.command_in_context(&key("cmd-f"), true),
-            Some(Command::Find)
+            Some(Command::FocusSearch)
         );
         assert_eq!(
             keys.command_in_context(&key("f"), false),
@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_shortcut_works_in_filter_without_stealing_typing_or_page_up() {
+    fn sidebar_shortcut_works_in_search_without_stealing_typing_or_page_up() {
         for editing in [false, true] {
             let mut keys = Keys::default();
             assert_eq!(
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn command_numbers_switch_sections_even_while_editing_the_filter() {
+    fn command_numbers_switch_sections_even_while_editing_search() {
         for editing in [false, true] {
             let mut keys = Keys::default();
             for number in 1..=5 {

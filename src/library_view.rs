@@ -3,7 +3,30 @@ use super::*;
 impl PlayerView {
     pub(super) fn header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let mut subtitle = match &self.browser.state().page {
+        let subtitle = match &self.browser.state().page {
+            Page::Search(_) => {
+                if self
+                    .failures
+                    .iter()
+                    .any(|(operation, _)| *operation == Operation::Library)
+                {
+                    "Search unavailable".into()
+                } else if self.browser.is_loading() || !self.browser.state().loaded {
+                    "Searching your library…".into()
+                } else {
+                    format!(
+                        "{} · {} · {}{}",
+                        count_label(self.browser.state().artists.len(), "artist"),
+                        count_label(self.browser.state().albums.len(), "album"),
+                        count_label(self.browser.state().songs.len(), "song"),
+                        if self.browser.state().more {
+                            " · more available"
+                        } else {
+                            ""
+                        }
+                    )
+                }
+            }
             Page::Artists => count_label(self.browser.state().artists.len(), "artist"),
             Page::Albums => format!(
                 "{}{}",
@@ -47,29 +70,9 @@ impl PlayerView {
                 })
                 .unwrap_or_default(),
         };
-        if !self.browser.state().query.is_empty() {
-            let state = self.browser.state();
-            let (total, noun) = match &state.page {
-                Page::Artists => (state.artists.len(), "artists"),
-                Page::Albums | Page::Artist(_) => (state.albums.len(), "albums"),
-                Page::Folder(path) => (
-                    self.browser
-                        .folder_library()
-                        .and_then(|library| library.folder(path))
-                        .map_or(0, |folder| folder.children.len() + folder.songs.len()),
-                    "items",
-                ),
-                _ => (state.songs.len(), "songs"),
-            };
-            subtitle = format!(
-                "{} of {total} loaded {noun}{}",
-                self.visible_entries().len(),
-                if state.more { " · more available" } else { "" }
-            );
-        }
         #[cfg(feature = "ui-tests")]
         {
-            self.ui_probe.borrow_mut().find_summary = subtitle.clone();
+            self.ui_probe.borrow_mut().search_summary = subtitle.clone();
         }
         let title = match &self.browser.state().page {
             Page::Folder(path) if path.is_empty() => "Folders".to_owned(),
@@ -93,15 +96,11 @@ impl PlayerView {
         }
         let search = || {
             div()
-                .id("find-in-list")
+                .id("library-search")
                 .min_w_0()
                 .when(stacked, |view| view.w_full())
                 .when(!stacked, |view| view.w(px(220.)).flex_shrink_0())
-                .tooltip(|_, cx| {
-                    cx.new(|_| Hint::new("Find in loaded items · / or ⌘F"))
-                        .into()
-                })
-                .child(self.filter.clone())
+                .child(self.search.clone())
         };
         div()
             .flex_shrink_0()
@@ -219,7 +218,7 @@ impl PlayerView {
         let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
-            return empty_state(colors, "No artists yet", &self.browser.state().query);
+            return empty_state(colors, "No artists yet");
         }
         uniform_list(
             ("artists", self.browser.request_id() as usize),
@@ -320,7 +319,7 @@ impl PlayerView {
         let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
-            return empty_state(colors, "No albums yet", &self.browser.state().query);
+            return empty_state(colors, "No albums yet");
         }
         uniform_list(
             ("albums", self.browser.request_id() as usize),
@@ -432,7 +431,6 @@ impl PlayerView {
                 } else {
                     "No songs yet"
                 },
-                &self.browser.state().query,
             );
         }
         let list = uniform_list(

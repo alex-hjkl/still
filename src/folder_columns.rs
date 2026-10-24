@@ -67,7 +67,7 @@ impl PlayerView {
             unreachable!();
         };
         if self.browser.folder_library().is_none() {
-            return empty_state(colors, "Folders have not been loaded yet", "");
+            return empty_state(colors, "Folders have not been loaded yet");
         }
         let parent = parent_path(path)
             .map(|parent| self.folder_column(parent, Column::Parent, Some(path), cx));
@@ -170,14 +170,7 @@ impl PlayerView {
             .child(column_header(colors, path));
         if entries.is_empty() {
             return pane
-                .child(column_message(
-                    colors,
-                    if column == Column::Current && !self.browser.state().query.is_empty() {
-                        "No matching items"
-                    } else {
-                        "No music in this folder"
-                    },
-                ))
+                .child(column_message(colors, "No music in this folder"))
                 .into_any_element();
         }
         let path = path.to_owned();

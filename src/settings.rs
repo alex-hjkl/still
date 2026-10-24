@@ -58,7 +58,6 @@ pub struct SavedFolder {
     pub library_id: String,
     pub path: String,
     pub selected: Option<FolderSelection>,
-    pub filter: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -489,7 +488,6 @@ mod tests {
                 library_id: "fixture".into(),
                 path: "/music/Сборник 🎵".into(),
                 selected: Some(FolderSelection::Song("song-12".into())),
-                filter: "  Theme  ".into(),
             });
         });
         settings.flush().blocking_recv().unwrap().unwrap();
@@ -502,7 +500,23 @@ mod tests {
         assert!(!restored.sidebar_compact);
         assert_eq!(restored.last_section, Section::Albums);
         assert_eq!(restored.window_size, [980., 700.]);
-        assert_eq!(restored.last_folder.unwrap().filter, "  Theme  ");
+        assert_eq!(
+            restored.last_folder.unwrap().selected,
+            Some(FolderSelection::Song("song-12".into()))
+        );
+        let mut legacy = serde_json::to_value(store.load().unwrap()).unwrap();
+        legacy["last_folder"]["filter"] = "legacy filter with no matches".into();
+        fs::write(&store.path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let upgraded = store.load().unwrap();
+        assert_eq!(
+            upgraded.last_folder.as_ref().unwrap().selected,
+            Some(FolderSelection::Song("song-12".into()))
+        );
+        assert!(
+            serde_json::to_value(upgraded).unwrap()["last_folder"]
+                .get("filter")
+                .is_none()
+        );
         // The previous hide/show preference must never hide the sidebar now.
         fs::write(&store.path, br#"{"sidebar_visible":false}"#).unwrap();
         assert!(store.load().unwrap().sidebar_compact);

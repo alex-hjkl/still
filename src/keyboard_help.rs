@@ -81,8 +81,8 @@ impl PlayerView {
                     ("gg / G", "First / last item"),
                     ("Ctrl+D / U", "Half a page down / up"),
                     ("Ctrl+F / B", "Page down / up"),
-                    ("/ · ⌘F", "Find in loaded list"),
-                    ("Enter / Esc", "Return to list; Esc again clears"),
+                    ("/ · ⌘F", "Search library"),
+                    ("Enter / Esc", "Return to results; Esc again goes back"),
                 ],
             ),
             (

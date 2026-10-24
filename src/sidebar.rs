@@ -130,7 +130,11 @@ impl PlayerView {
         {
             self.ui_probe.borrow_mut().sidebar_width = width;
         }
-        let selected = self.section_index();
+        let selected = if matches!(self.browser.state().page, Page::Search(_)) {
+            usize::MAX
+        } else {
+            self.section_index()
+        };
         let hints = window.is_window_active() && section_hints(window.modifiers());
         let server_label = if self.demo {
             "Demo · no playback".to_owned()

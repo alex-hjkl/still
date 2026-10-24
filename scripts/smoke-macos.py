@@ -26,7 +26,7 @@ import wave
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=Path(__file__).resolve().parents[1] / "target/release/Still.app")
-    parser.add_argument("--case", choices=["library", "filter", "connection", "folders", "unicode"], default="library")
+    parser.add_argument("--case", choices=["library", "search", "connection", "folders", "unicode"], default="library")
     parser.add_argument("--relaunch", action="store_true", help="Reopen once to check saved preferences")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--automated", action="store_true", help="Run native UI assertions, restart restoration, and connection form checks without manual input")
@@ -82,10 +82,16 @@ def main():
         from demo_fixture import cover, library
         albums, tracks = library()
         covers = {album["id"]: cover(index) for index, album in enumerate(albums)}
+    library_artists = [dict(id="composer", name="Composers", albumCount=len(albums))]
+    if args.record_demo is not None:
+        library_artists = [dict(id=f"artist-{index}", name=name,
+                                albumCount=sum(album["artist"] == name for album in albums))
+                           for index, name in enumerate(sorted({album["artist"] for album in albums}))]
     liked = {"song-2"}
     fail_more = True
     fail_songs = args.automated
     fail_artist = args.automated
+    fail_search = args.automated
     methods = []
     audio = io.BytesIO()
     with wave.open(audio, "wb") as wav:
@@ -99,7 +105,7 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal fail_more, fail_songs, fail_artist
+            nonlocal fail_more, fail_songs, fail_artist, fail_search
             url = urlsplit(self.path)
             method = url.path.rsplit("/", 1)[-1].removesuffix(".view")
             methods.append(method)
@@ -113,11 +119,7 @@ def main():
             elif method == "ping" and params.get("u") == ["malformed"]:
                 body = {"status": "Unexpected response from the server. " * 40}
             elif method == "getArtists":
-                artists = [dict(id="composer", name="Composers", albumCount=401)]
-                if args.record_demo is not None:
-                    artists = [dict(id=f"artist-{index}", name=name, albumCount=sum(a["artist"] == name for a in albums))
-                               for index, name in enumerate(sorted({album["artist"] for album in albums}))]
-                body["artists"] = {"index": [{"artist": artists}]}
+                body["artists"] = {"index": [{"artist": library_artists}]}
             elif method == "getArtist":
                 if fail_artist:
                     fail_artist = False
@@ -147,7 +149,26 @@ def main():
                 body["album"] = dict(album, song=songs)
             elif method == "search3":
                 size = int(params.get("songCount", ["200"])[0])
-                if fail_songs and size == 200:
+                query = params.get("query", [""])[0].strip().casefold()
+                if query:
+                    if query == "album 400":
+                        time.sleep(1)
+                    if query == "retry-search" and fail_search:
+                        fail_search = False
+                        body = {"status": "failed", "error": {"code": 50}}
+                    else:
+                        groups = [("artist", library_artists, ["name"]),
+                                  ("album", albums, ["name", "artist"]),
+                                  ("song", tracks, ["title", "artist", "album"])]
+                        result = {}
+                        for kind, records, fields in groups:
+                            found = [record for record in records
+                                     if query in " ".join(record.get(field, "") for field in fields).casefold()]
+                            start = int(params.get(f"{kind}Offset", ["0"])[0])
+                            count = int(params.get(f"{kind}Count", ["200"])[0])
+                            result[kind] = found[start:start + count]
+                        body["searchResult3"] = result
+                elif fail_songs and size == 200:
                     fail_songs = False
                     body = {"status": "failed", "error": {"code": 50}}
                 else:
@@ -263,7 +284,16 @@ def main():
                         raise RuntimeError("App logged a panic during the smoke check")
                 preferences = root / "config/preferences.json"
                 if preferences.exists():
-                    print(json.dumps(dict(preferences=json.loads(preferences.read_text()))), flush=True)
+                    saved_preferences = json.loads(preferences.read_text())
+                    print(json.dumps(dict(preferences=saved_preferences)), flush=True)
+                    if args.automated and "filter" in (saved_preferences.get("last_folder") or {}):
+                        raise RuntimeError("Legacy folder filters must not be written back to preferences")
+                    if args.automated and not args.connection_only and launch == 0:
+                        # Upgrade regression: old folder filters must not hide rows
+                        # after restoring the saved track with the unified search UI.
+                        previous = json.loads(preferences.read_text())
+                        previous["last_folder"]["filter"] = "legacy filter with no matches"
+                        preferences.write_text(json.dumps(previous))
             if scripted:
                 saved = Path(__file__).resolve().parents[1] / ".local/ui-test-results" / uuid.uuid4().hex
                 saved.mkdir(parents=True)

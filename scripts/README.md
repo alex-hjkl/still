@@ -73,7 +73,7 @@ python3 scripts/smoke-linux.py --backend x11
 
 The runner builds the release with `ui-tests`, opens the real GPUI window,
 starts a loopback fixture server, streams synthetic silent WAV audio, and
-checks navigation, Unicode folders, help, resizing, filter entry, playback,
+checks navigation, Unicode folders, help, resizing, library search, playback,
 pause/resume, seeking, Next and restoring preferences on a second launch.
 It verifies audio position advancement and seek results, with no dependency
 on the macOS Now Playing bridge. Reports and logs stay in ignored
@@ -141,9 +141,9 @@ copy of the app. It sends keystrokes through GPUI and checks state after real na
 GPUI layout and paint frames, including Core Text layout. A test-only timer drives
 these frames even when macOS suspends display callbacks for a covered window. It covers long Cyrillic paths and
 emoji, j/k/h/l, parent/current/preview column paths, visible selection, page movement,
-780×640 and 1120×760 windows, filter entry, Cmd+B between compact and expanded sidebars while filtering, restoring the mode
+780×640 and 1120×760 windows, search entry, Cmd+B between compact and expanded sidebars while searching, restoring the mode
 after a restart, fixed painted icon positions in both modes, switching sections, playback, restoring
-the exact folder/track/filter in a second process, and Cmd+Q from a password field
+the exact folder and track in a second process, ignoring legacy saved filters without writing them back, and Cmd+Q from a password field
 in a third process. The connection form is checked at 780×640 after a rejected
 login, including the painted bounds of its controls. A long malformed response
 also checks scrolling to the bottom and back to the fields.
@@ -152,15 +152,21 @@ including a failed request and retry. Folder queues include nested directories.
 The footer is checked for context-specific shortcuts and bounds at narrow widths.
 It also invokes the shared native command dispatchers for
 play/pause/toggle/stop/next/previous, checks repeated play/pause and resuming after
-stop, verifies recovery after the audio worker stops, arrow-key seeking in folders and songs (and text editing in the filter),
+stop, verifies recovery after the audio worker stops, arrow-key seeking in folders and songs (and text editing in search),
 three arrow keys in one frame and a batch of three native Skip commands,
 checks playback shortcuts with keyboard help open without navigating the hidden library,
 and reads title, position and playback state back from MPNowPlayingInfoCenter.
-The Find count and the unchanged library columns behind the help panel are also checked.
-Theme checks cover Latte / Macchiato switching, preserving filter focus and text,
+The unchanged library columns behind the help panel are also checked.
+Library search checks server results beyond the first loaded album page, all three
+result categories, pagination, opening results and returning to the saved query,
+Unicode song search and playback, clearing back to the previous list with input
+focus intact, editing in the middle of a query without moving the caret,
+request failure / retry, and rejecting a delayed response after the query changes
+or the field is cleared.
+Theme checks cover Latte / Macchiato switching, preserving search focus and text,
 restoring the theme after restart, System appearance changes and manual overrides,
 keyboard selection / cancellation in the appearance menu, and both library and
-connection-screen palettes. Resizing checks keep Find focused while it moves
+connection-screen palettes. Resizing checks keep search focused while it moves
 between the wide header and a second row. Text steps wait for stable painted focus,
 assert the intended field and reject changes to other inputs; the connection case
 repeats rapid Tab / text sequences without idle steps. To stress that case across
@@ -190,8 +196,8 @@ For the keyboard help overlay, use `--size 780 640`, `--size 1030 640`, or
 key labels and descriptions should stay separate and readable, and Close
 should remain visible above the scrolling content. The library stays visible behind the
 panel. Clicking outside closes help without activating the row beneath it; the player
-stays available. In Find, check the result count and clear ×; clearing keeps input
-focus. Drag volume, mute/unmute, and verify the previous level returns. Drag the
+stays available. In search, check the result count and clear ×; clearing returns to the previous
+list and selection while retaining input focus. Drag volume, mute/unmute, and verify the previous level returns. Drag the
 seek bar while paused, including releasing outside its bounds; the preview time
 should match the committed position and the track should stay paused.
 
@@ -233,11 +239,11 @@ python3 scripts/smoke-macos.py --case folders
 5. In CD 2, press G, PageUp, PageDown; selection stays visible in the middle.
    Resize the window and repeat. Enter plays the selected track; Shift+Enter
    plays the folder including subfolders.
-6. Go back to Film Alpha, filter to CD 1, enter it, then return. The filter and
-   selection must remain. Click CD 2 in the unfiltered parent column, then h:
-   the filter clears if needed so the returned child stays selected.
+6. In CD 2, select a track, focus search and enter its title. Results must come
+   from the whole library. Clear × to restore CD 2 and the selected track while
+   keeping input focus; Escape returns keyboard focus to the folder list.
 7. Click a track in the preview column. The middle must move to its folder and
-   playback must use that exact track. Check Refresh folders and an empty filter
+   playback must use that exact track. Check Refresh folders and an empty search
    result. Cmd+Q must print exitCode 0.
 
 ## Unicode crash regression
@@ -259,10 +265,10 @@ main README; symbol images are retained under `target/release/symbols/<UUID>/`.
 ## Quit while editing
 
 ```sh
-python3 scripts/smoke-macos.py --case filter
+python3 scripts/smoke-macos.py --case search
 ```
 
-Press Cmd+F, enter a filter, then Cmd+Q while the caret is still in the input.
+Press Cmd+F, enter a search query, then Cmd+Q while the caret is still in the input.
 The process must exit with code 0.
 
 ```sh

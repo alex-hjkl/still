@@ -30,7 +30,7 @@ def scenario(launch, tracks):
         return dict(action="expect", **values)
 
     if launch == 1:
-        return [expect(connected=True, loaded=True, page="songs", filter="", shuffle=True,
+        return [expect(connected=True, loaded=True, page="songs", search="", shuffle=True,
                        volume=0.65, sidebar_width=208), dict(action="quit")]
     folder = "/Music/Коллекция 🎵/Очень длинное название альбома"
     return [
@@ -59,7 +59,8 @@ def scenario(launch, tracks):
         dict(action="resize", size=[780, 640]), expect(size=[780, 640]),
         dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
         key("cmd-3"), expect(page="songs", loaded=True),
-        key("/"), dict(action="text", text="Paper"), expect(filter="Paper"),
+        key("/"), dict(action="text", text="Paper"),
+        expect(page="search", loaded=True, search="Paper", search_counts=[0, 0, 1]),
         key("enter"), expect(selected=tracks[1]["id"]),
         key("cmd-b"), expect(sidebar_width=208),
         key("s"), expect(shuffle=True), key("-"), expect(volume=0.65),
@@ -123,7 +124,10 @@ def main():
             elif method == "search3":
                 start = int(params.get("songOffset", ["0"])[0])
                 count = int(params.get("songCount", ["200"])[0])
-                body["searchResult3"] = {"song": tracks[start:start + count]}
+                query = params.get("query", [""])[0].strip().casefold()
+                found = [track for track in tracks if query in
+                         " ".join(track.get(field, "") for field in ["title", "artist", "album"]).casefold()]
+                body["searchResult3"] = {"song": found[start:start + count]}
             elif method == "getStarred2":
                 body["starred2"] = {"song": []}
             payload = audio.getvalue() if method == "stream" else image if method == "getCoverArt" else json.dumps({"subsonic-response": body}).encode()

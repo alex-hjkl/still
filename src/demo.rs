@@ -4,6 +4,26 @@ impl PlayerView {
     pub(super) fn load_demo_page(&mut self) {
         self.browser.invalidate_requests();
         let mut data = match self.browser.state().page.clone() {
+            Page::Search(query) => {
+                let query = query.trim().to_lowercase();
+                let matches = |parts: &[&str]| parts.join(" ").to_lowercase().contains(&query);
+                let albums = demo_albums();
+                LibraryData::Search(crate::api::SearchResults {
+                    artists: demo_artists()
+                        .into_iter()
+                        .filter(|artist| matches(&[&artist.name]))
+                        .collect(),
+                    songs: albums
+                        .iter()
+                        .flat_map(|album| album.song.clone())
+                        .filter(|song| matches(&[&song.title, &song.artist, &song.album]))
+                        .collect(),
+                    albums: albums
+                        .into_iter()
+                        .filter(|album| matches(&[&album.name, &album.artist]))
+                        .collect(),
+                })
+            }
             Page::Artists => LibraryData::Artists(demo_artists()),
             Page::Albums => LibraryData::Albums(demo_albums()),
             Page::Artist(artist) => LibraryData::Albums(

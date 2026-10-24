@@ -1,6 +1,6 @@
 use crate::{
-    api::{Album, Artist, Navidrome, PAGE_SIZE, Song},
-    folders::{FolderLibrary, file_name, parent_path},
+    api::{Album, Artist, Navidrome, PAGE_SIZE, SearchResults, Song},
+    folders::{FolderLibrary, parent_path},
     requests::{Cancellation, Requests},
     settings::{FolderSelection, SavedFolder, Section},
 };
@@ -16,6 +16,8 @@ pub enum Page {
     Artist(Artist),
     Album(Album),
     Folder(String),
+    // Empty input returns to the source page before entering search.
+    Search(String),
 }
 
 impl Page {
@@ -34,6 +36,7 @@ impl Page {
             Self::Albums | Self::Album(_) => Section::Albums,
             Self::Songs => Section::Songs,
             Self::Folder(_) => Section::Folders,
+            Self::Search(_) => Section::Songs,
             Self::Liked => Section::Liked,
         }
     }
@@ -53,6 +56,7 @@ pub enum LibraryData {
     Songs(Vec<Song>),
     Album(Album),
     Folders(FolderLibrary),
+    Search(SearchResults),
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +76,7 @@ impl LibraryRequest {
             Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
             Page::Album(album) => LibraryData::Album(client.album(&album.id)?),
             Page::Folder(_) => LibraryData::Folders(client.folder_library(cancellation)?),
+            Page::Search(query) => LibraryData::Search(client.search(query, self.offset)?),
         };
         cancellation.check()?;
         Ok(data)
@@ -82,8 +87,6 @@ impl LibraryRequest {
 pub struct PageState {
     pub page: Page,
     pub cursor: usize,
-    pub query: String,
-    pub filter_text: String,
     pub artists: Arc<Vec<Artist>>,
     pub albums: Arc<Vec<Album>>,
     pub songs: Arc<Vec<Song>>,
@@ -97,8 +100,6 @@ impl PageState {
         Self {
             page,
             cursor: 0,
-            query: String::new(),
-            filter_text: String::new(),
             artists: Arc::default(),
             albums: Arc::default(),
             songs: Arc::default(),
@@ -158,7 +159,6 @@ impl Browser {
             library_id,
             path: path.clone(),
             selected,
-            filter: self.state.filter_text.clone(),
         })
     }
 
@@ -173,13 +173,7 @@ impl Browser {
             };
             path = parent;
         }
-        let same_folder = path == saved.path;
         self.navigate(Page::Folder(path.to_owned()), false);
-        self.set_query(if same_folder {
-            saved.filter.clone()
-        } else {
-            String::new()
-        });
         let row = self
             .state
             .entries
@@ -294,10 +288,6 @@ impl Browser {
         {
             let child = BrowserEntry::Folder(path.clone());
             self.navigate(Page::Folder(parent.to_owned()), false);
-            // A restored filter may hide the child after a jump from a side column.
-            if !self.state.entries.contains(&child) {
-                self.set_query(String::new());
-            }
             if let Some(row) = self.state.entries.iter().position(|entry| entry == &child) {
                 self.set_cursor(row);
             }
@@ -327,6 +317,12 @@ impl Browser {
         let offset = match self.state.page {
             Page::Albums => self.state.albums.len(),
             Page::Songs => self.state.songs.len(),
+            Page::Search(_) => self
+                .state
+                .artists
+                .len()
+                .max(self.state.albums.len())
+                .max(self.state.songs.len()),
             _ => return None,
         };
         Some(LibraryRequest {
@@ -336,6 +332,9 @@ impl Browser {
     }
 
     pub fn apply(&mut self, data: LibraryData, append: bool) {
+        let selected = (append && matches!(self.state.page, Page::Search(_)))
+            .then(|| self.state.entries.get(self.state.cursor).cloned())
+            .flatten();
         match data {
             LibraryData::Artists(artists) => self.state.artists = Arc::new(artists),
             LibraryData::Albums(albums) => {
@@ -361,19 +360,53 @@ impl Browser {
                 self.state.page = Page::Album(album);
             }
             LibraryData::Folders(library) => self.folder_library = Some(Arc::new(library)),
+            LibraryData::Search(results) => {
+                self.state.more = results.artists.len() == PAGE_SIZE
+                    || results.albums.len() == PAGE_SIZE
+                    || results.songs.len() == PAGE_SIZE;
+                if append {
+                    Arc::make_mut(&mut self.state.artists).extend(results.artists);
+                    Arc::make_mut(&mut self.state.albums).extend(results.albums);
+                    Arc::make_mut(&mut self.state.songs).extend(results.songs);
+                } else {
+                    self.state.artists = Arc::new(results.artists);
+                    self.state.albums = Arc::new(results.albums);
+                    self.state.songs = Arc::new(results.songs);
+                }
+            }
         }
         self.state.loaded = true;
         self.rebuild_entries();
+        if let Some(selected) = selected
+            && let Some(row) = self
+                .state
+                .entries
+                .iter()
+                .position(|entry| *entry == selected)
+        {
+            self.state.cursor = row;
+        }
         self.clamp_cursor();
     }
 
-    pub fn set_query(&mut self, text: String) -> bool {
-        let query = text.trim().to_lowercase();
-        self.state.filter_text = text;
-        if self.state.query == query {
+    pub fn set_search(&mut self, text: String) -> bool {
+        if text.trim().is_empty() {
             return false;
         }
-        self.state.query = query;
+        let Page::Search(query) = &mut self.state.page else {
+            return false;
+        };
+        if query.trim() == text.trim() {
+            *query = text;
+            return false;
+        }
+        *query = text;
+        self.invalidate_requests();
+        self.state.artists = Arc::default();
+        self.state.albums = Arc::default();
+        self.state.songs = Arc::default();
+        self.state.more = false;
+        self.state.loaded = false;
         self.state.cursor = 0;
         self.rebuild_entries();
         true
@@ -408,9 +441,6 @@ impl Browser {
         if !matches!(&self.state.page, Page::Folder(current) if current == path) {
             self.navigate(Page::Folder(path.to_owned()), false);
         }
-        if !self.state.entries.contains(entry) {
-            self.set_query(String::new());
-        }
         let Some(row) = self
             .state
             .entries
@@ -424,67 +454,35 @@ impl Browser {
     }
 
     fn rebuild_entries(&mut self) {
-        let query = &self.state.query;
-        // Avoid formatting and lowercasing every record when the filter is empty.
-        let matches =
-            |parts: &[&str]| query.is_empty() || parts.join(" ").to_lowercase().contains(query);
         let entries = match &self.state.page {
-            Page::Artists => self
-                .state
-                .artists
-                .iter()
-                .enumerate()
-                .filter(|(_, artist)| matches(&[&artist.name]))
-                .map(|(i, _)| BrowserEntry::Artist(i))
+            Page::Search(_) => (0..self.state.artists.len())
+                .map(BrowserEntry::Artist)
+                .chain((0..self.state.albums.len()).map(BrowserEntry::Album))
+                .chain((0..self.state.songs.len()).map(BrowserEntry::Song))
                 .collect(),
-            Page::Albums | Page::Artist(_) => self
-                .state
-                .albums
-                .iter()
-                .enumerate()
-                .filter(|(_, album)| matches(&[&album.name, &album.artist]))
-                .map(|(i, _)| BrowserEntry::Album(i))
+            Page::Artists => (0..self.state.artists.len())
+                .map(BrowserEntry::Artist)
                 .collect(),
-            Page::Songs | Page::Liked | Page::Album(_) => self
-                .state
-                .songs
-                .iter()
-                .enumerate()
-                .filter(|(_, song)| matches(&[&song.title, &song.artist, &song.album]))
-                .map(|(i, _)| BrowserEntry::Song(i))
+            Page::Albums | Page::Artist(_) => (0..self.state.albums.len())
+                .map(BrowserEntry::Album)
                 .collect(),
-            Page::Folder(path) => {
-                if let Some(folder) = self
-                    .folder_library
-                    .as_ref()
-                    .and_then(|library| library.folder(path))
-                {
+            Page::Songs | Page::Liked | Page::Album(_) => (0..self.state.songs.len())
+                .map(BrowserEntry::Song)
+                .collect(),
+            Page::Folder(path) => self
+                .folder_library
+                .as_ref()
+                .and_then(|library| library.folder(path))
+                .map(|folder| {
                     folder
                         .children
                         .iter()
-                        .filter(|path| matches(&[file_name(path)]))
                         .cloned()
                         .map(BrowserEntry::Folder)
-                        .chain(
-                            folder
-                                .songs
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, song)| {
-                                    matches(&[
-                                        song.path.as_deref().map(file_name).unwrap_or_default(),
-                                        &song.title,
-                                        &song.artist,
-                                        &song.album,
-                                    ])
-                                })
-                                .map(|(i, _)| BrowserEntry::Song(i)),
-                        )
+                        .chain((0..folder.songs.len()).map(BrowserEntry::Song))
                         .collect()
-                } else {
-                    Vec::new()
-                }
-            }
+                })
+                .unwrap_or_default(),
         };
         self.state.entries = Arc::new(entries);
     }
@@ -512,30 +510,15 @@ impl Browser {
     }
 
     pub fn selected_queue(&self, row: usize) -> Option<(Arc<Vec<Song>>, usize)> {
-        let entries = &self.state.entries;
-        if !matches!(entries.get(row)?, BrowserEntry::Song(_)) {
+        let BrowserEntry::Song(index) = self.state.entries.get(row)? else {
             return None;
-        }
-        let index = entries[..row]
-            .iter()
-            .filter(|entry| matches!(entry, BrowserEntry::Song(_)))
-            .count();
-        let source = if let Page::Folder(path) = &self.state.page {
+        };
+        let songs = if let Page::Folder(path) = &self.state.page {
             &self.folder_library.as_ref()?.folder(path)?.songs
         } else {
             &self.state.songs
         };
-        let songs = if self.state.query.is_empty() {
-            source.clone()
-        } else {
-            Arc::new(
-                entries
-                    .iter()
-                    .filter_map(|entry| self.entry_song(entry).cloned())
-                    .collect(),
-            )
-        };
-        Some((songs, index))
+        Some((songs.clone(), *index))
     }
 }
 
@@ -544,6 +527,104 @@ mod tests {
     use super::*;
     use crate::failure::{Failure, RetryAction};
     use serde_json::json;
+
+    #[test]
+    fn search_pages_keep_all_categories_and_queue_only_songs() {
+        let mut browser = Browser::default();
+        browser.navigate(Page::Search("piano".into()), true);
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                artists: vec![
+                    serde_json::from_value(json!({"id":"artist", "name":"Piano"})).unwrap(),
+                ],
+                albums: (0..PAGE_SIZE).map(album).collect(),
+                songs: vec![song(0), song(1)],
+            }),
+            false,
+        );
+        let song_row = 1 + PAGE_SIZE;
+        browser.set_cursor(song_row);
+        let (queue, selected) = browser.selected_queue(song_row + 1).unwrap();
+        assert_eq!(selected, 1);
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].id, "song-0");
+        assert!(browser.selected_queue(0).is_none());
+        assert_eq!(browser.more_request().unwrap().offset, PAGE_SIZE);
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                albums: vec![album(PAGE_SIZE)],
+                ..Default::default()
+            }),
+            true,
+        );
+        assert_eq!(browser.state.cursor, song_row + 1);
+        assert_eq!(
+            browser.entries()[browser.state.cursor],
+            BrowserEntry::Song(0)
+        );
+        assert_eq!(browser.state.albums.len(), PAGE_SIZE + 1);
+        assert!(browser.more_request().is_none());
+    }
+
+    #[test]
+    fn changing_search_rejects_old_requests_and_ignores_empty_updates() {
+        let mut browser = Browser::default();
+        browser.navigate(Page::Search("old".into()), true);
+        let (old_id, old_cancel) = browser.start_load();
+        assert!(browser.set_search("Музыка 🎵".into()));
+        assert!(old_cancel.check().is_err());
+        assert!(!browser.finish_load(old_id));
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                songs: vec![song(0)],
+                ..Default::default()
+            }),
+            false,
+        );
+        assert!(!browser.set_search("  Музыка 🎵  ".into()));
+        assert_eq!(browser.entries().len(), 1);
+        assert!(!browser.set_search("  ".into()));
+        assert!(matches!(&browser.state.page, Page::Search(query) if query.trim() == "Музыка 🎵"));
+        assert_eq!(browser.entries().len(), 1);
+    }
+
+    #[test]
+    fn back_restores_search_results_query_and_selection() {
+        let mut browser = Browser::default();
+        browser.navigate(Page::Search("piano".into()), true);
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                albums: vec![album(0)],
+                songs: vec![song(0)],
+                ..Default::default()
+            }),
+            false,
+        );
+        browser.set_cursor(1);
+        browser.navigate(Page::Album(album(0)), true);
+        assert!(browser.back());
+        assert!(matches!(&browser.state.page, Page::Search(query) if query == "piano"));
+        assert!(browser.state.loaded);
+        assert_eq!(browser.state.cursor, 1);
+        assert_eq!(browser.entries().len(), 2);
+    }
+
+    #[test]
+    fn leaving_search_restores_source_selection_and_rejects_inflight_results() {
+        let mut browser = folder_browser();
+        browser.set_cursor(1);
+        browser.navigate(Page::Search("piano".into()), true);
+        let (request_id, cancellation) = browser.start_load();
+        assert!(browser.back());
+        assert!(cancellation.check().is_err());
+        assert!(!browser.finish_load(request_id));
+        assert!(matches!(&browser.state.page, Page::Folder(path) if path == "/music"));
+        assert!(browser.state.loaded);
+        assert_eq!(
+            browser.entries()[browser.state.cursor],
+            BrowserEntry::Folder("/music/B".into())
+        );
+    }
 
     fn album(index: usize) -> Album {
         serde_json::from_value(
@@ -610,14 +691,12 @@ mod tests {
         let mut first = Browser::default();
         first.navigate(Page::Folder("/music".into()), false);
         first.apply(LibraryData::Folders(library(false)), false);
-        first.set_query("  THEME  ".into());
         first.set_cursor(1);
         let saved = first.saved_folder("library".into()).unwrap();
         let mut restarted = Browser::default();
         restarted.apply(LibraryData::Folders(library(true)), false);
         restarted.restore_folder(&saved);
         assert!(matches!(&restarted.state.page, Page::Folder(path) if path == "/music"));
-        assert_eq!(restarted.state.filter_text, "  THEME  ");
         assert_eq!(restarted.state.cursor, 0);
         assert_eq!(restarted.selected_queue(0).unwrap().0[0].id, "chosen");
     }
@@ -629,18 +708,16 @@ mod tests {
             library_id: "library".into(),
             path: "/music/B/missing/also-missing".into(),
             selected: Some(FolderSelection::Song("removed".into())),
-            filter: "no match".into(),
         });
         assert!(matches!(&browser.state.page, Page::Folder(path) if path == "/music/B"));
-        assert!(browser.state.query.is_empty());
         assert_eq!(browser.state.cursor, 0);
         assert!(browser.state.loaded);
     }
 
     #[test]
-    fn folder_columns_restore_each_directory_selection_and_filter() {
+    fn folder_columns_restore_each_directory_selection() {
         let mut browser = folder_browser();
-        browser.set_query("  B  ".into());
+        browser.set_cursor(1);
         browser.navigate(Page::Folder("/music/B".into()), true);
         browser.set_cursor(1);
         browser.navigate(Page::Folder("/music/B/CD 2".into()), true);
@@ -651,7 +728,6 @@ mod tests {
         browser.navigate(Page::Folder("/music/B".into()), false);
         assert_eq!(browser.state.cursor, 1);
         assert!(browser.back());
-        assert_eq!(browser.state.filter_text, "  B  ");
         assert_eq!(
             browser.entries()[browser.state.cursor],
             BrowserEntry::Folder("/music/B".into())
@@ -661,15 +737,13 @@ mod tests {
     }
 
     #[test]
-    fn side_column_activation_selects_the_clicked_song_despite_a_saved_filter() {
+    fn side_column_activation_selects_the_clicked_song() {
         let mut browser = folder_browser();
         browser.navigate(Page::Folder("/music/B".into()), false);
-        browser.set_query("CD".into());
         browser.navigate(Page::Folder("/music".into()), false);
         let preview = browser.folder_entries("/music/B");
         assert_eq!(preview.len(), 3);
         assert!(browser.focus_folder_entry("/music/B", &preview[2]));
-        assert!(browser.state.query.is_empty());
         let (queue, index) = browser.selected_queue(browser.state.cursor).unwrap();
         assert_eq!(queue[index].id, "b");
         assert_eq!(queue.len(), 1);
@@ -678,7 +752,6 @@ mod tests {
     #[test]
     fn folder_back_follows_the_parent_after_a_side_column_jump() {
         let mut browser = folder_browser();
-        browser.set_query("A".into());
         browser.navigate(Page::Folder("/music/B/CD 2".into()), false);
         assert!(browser.back());
         assert!(matches!(&browser.state.page, Page::Folder(path) if path == "/music/B"));
@@ -687,7 +760,6 @@ mod tests {
             BrowserEntry::Folder("/music/B/CD 2".into())
         );
         assert!(browser.back());
-        assert!(browser.state.query.is_empty());
         assert_eq!(
             browser.entries()[browser.state.cursor],
             BrowserEntry::Folder("/music/B".into())
@@ -699,24 +771,23 @@ mod tests {
     }
 
     #[test]
-    fn refreshing_folders_discards_saved_directory_filters() {
+    fn refreshing_folders_discards_cached_directory_selections() {
         let mut browser = folder_browser();
-        browser.set_query("B".into());
         browser.navigate(Page::Folder("/music/B".into()), false);
-        browser.set_query("CD 2".into());
+        browser.set_cursor(1);
         browser.clear_folders();
         browser.navigate(Page::Folder(String::new()), false);
         assert!(browser.folder_states.is_empty());
-        assert!(browser.state.query.is_empty());
+        assert!(browser.folder_library.is_none());
+        assert!(browser.entries().is_empty());
         assert!(!browser.state.loaded);
     }
 
     #[test]
-    fn replacing_songs_keeps_the_cached_filter_and_cursor_consistent() {
+    fn replacing_songs_clamps_selection_and_rebuilds_entries() {
         let mut browser = Browser::default();
         browser.navigate(Page::Songs, false);
         browser.apply(LibraryData::Songs((0..3).map(song).collect()), false);
-        browser.set_query("Track".into());
         browser.set_cursor(2);
         browser.replace_songs(vec![song(20)]);
         assert_eq!(browser.state().cursor, 0);
@@ -729,12 +800,11 @@ mod tests {
     }
 
     #[test]
-    fn back_restores_all_album_pages_filter_and_selection_without_reloading() {
+    fn back_restores_all_album_pages_and_selection_without_reloading() {
         let mut browser = Browser::default();
         browser.navigate(Page::Albums, false);
         browser.apply(LibraryData::Albums((0..200).map(album).collect()), false);
         browser.apply(LibraryData::Albums((200..400).map(album).collect()), true);
-        browser.set_query("  АЛЬБОМ  ".into());
         browser.state.cursor = 250;
         let albums = browser.state.albums.clone();
         browser.navigate(Page::Album(album(250)), true);
@@ -747,46 +817,32 @@ mod tests {
         assert!(browser.state.loaded);
         assert!(Arc::ptr_eq(&browser.state.albums, &albums));
         assert_eq!(browser.state.albums.len(), 400);
-        assert_eq!(browser.state.filter_text, "  АЛЬБОМ  ");
-        assert_eq!(browser.state.query, "альбом");
         assert_eq!(browser.state.cursor, 250);
         assert_eq!(browser.entries()[250], BrowserEntry::Album(250));
         assert_eq!(browser.more_request().unwrap().offset, 400);
     }
 
     #[test]
-    fn queues_match_visible_rows_and_remain_stable_after_filtering_and_appending() {
+    fn queues_use_source_indices_and_remain_stable_after_appending() {
         let mut browser = Browser::default();
         browser.navigate(Page::Songs, false);
         browser.apply(LibraryData::Songs((0..4).map(song).collect()), false);
-        let (all, _) = browser.selected_queue(2).unwrap();
+        let (all, selected) = browser.selected_queue(2).unwrap();
         assert!(Arc::ptr_eq(&all, &browser.state.songs));
-        browser.set_query("TRACK 2".into());
-        let entries = browser.entries();
-        assert_eq!(&*entries, &[BrowserEntry::Song(2)]);
-        let (filtered, selected) = browser.selected_queue(0).unwrap();
-        assert_eq!(selected, 0);
-        assert_eq!(filtered[0].id, "song-2");
-        // Repeated renders and equivalent queries retain the cached selection.
-        assert!(!browser.set_query(" track 2 ".into()));
-        assert!(Arc::ptr_eq(&entries, &browser.entries()));
+        assert_eq!(selected, 2);
+        assert_eq!(all[selected].id, "song-2");
         browser.apply(LibraryData::Songs(vec![song(20)]), true);
-        assert_eq!(browser.entries().len(), 2);
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(browser.entries().len(), 5);
         assert_eq!(all.len(), 4);
-        let (queue, selected) = browser.selected_queue(1).unwrap();
-        assert_eq!(selected, 1);
-        assert_eq!(
-            queue
-                .iter()
-                .map(|song| song.id.as_str())
-                .collect::<Vec<_>>(),
-            ["song-2", "song-20"]
-        );
+        let (queue, selected) = browser.selected_queue(4).unwrap();
+        assert_eq!(selected, 4);
+        assert!(Arc::ptr_eq(&queue, &browser.state.songs));
+        assert_eq!(queue[selected].id, "song-20");
+        assert_eq!(queue[2].id, "song-2");
     }
 
     #[test]
-    fn folder_selection_skips_directory_rows_and_uses_the_same_filtered_queue() {
+    fn folder_selection_skips_directory_rows_and_uses_the_source_queue() {
         let mut direct = song(0);
         direct.path = Some("/music/01.flac".into());
         let mut second = song(1);
@@ -803,13 +859,11 @@ mod tests {
         assert!(Arc::ptr_eq(&queue, &source));
         assert_eq!(selected, 1);
         assert_eq!(queue[selected].id, "song-1");
-        browser.set_query("02.FLAC".into());
-        let (queue, selected) = browser.selected_queue(0).unwrap();
-        assert_eq!(selected, 0);
-        assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].id, "song-1");
-        browser.set_query("исполнитель".into());
-        assert_eq!(browser.entries().len(), 2);
+        assert_eq!(queue.len(), 2);
+        browser.navigate(Page::Folder("/music/Disc 2".into()), true);
+        let (nested, selected) = browser.selected_queue(0).unwrap();
+        assert_eq!(nested[selected].id, "song-2");
+        assert_eq!(queue.len(), 2);
     }
 
     #[test]
@@ -888,7 +942,6 @@ mod tests {
                 LibraryData::Albums((0..200).map(album).collect())
             };
             browser.apply(data, false);
-            browser.set_query(if songs { "Track" } else { "Альбом" }.into());
             browser.state.cursor = 175;
             let request = browser.more_request().unwrap();
             let result = request.run(client.clone(), &Cancellation::default());
@@ -903,10 +956,6 @@ mod tests {
             browser.apply(data, retry.offset > 0);
             assert_eq!(browser.entries().len(), 201);
             assert_eq!(browser.state.cursor, 175);
-            assert_eq!(
-                browser.state.filter_text,
-                if songs { "Track" } else { "Альбом" }
-            );
             assert!(!browser.state.more);
             if songs {
                 assert_eq!(browser.state.songs[200].id, "last");

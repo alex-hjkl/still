@@ -25,8 +25,9 @@ impl PlayerView {
                 ("f", "Unlike"),
             ]),
             Page::Songs => hints.extend([("Enter", "Play"), ("f", "Like")]),
+            Page::Search(_) => hints.extend([("Enter", "Open / play"), ("Esc", "Back")]),
         }
-        hints.push(("/", "Find"));
+        hints.push(("/", "Search"));
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().footer_hints = hints

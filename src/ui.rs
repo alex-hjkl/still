@@ -54,6 +54,8 @@ pub(crate) use ui_tests::start_ui_test;
 mod library_view;
 #[path = "player_bar.rs"]
 mod player_bar;
+#[path = "search_view.rs"]
+mod search_view;
 #[path = "sidebar.rs"]
 mod sidebar;
 #[path = "status_bar.rs"]
@@ -78,7 +80,7 @@ pub struct PlayerView {
     server: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
-    filter: Entity<TextInput>,
+    search: Entity<TextInput>,
     subscriptions: Vec<Subscription>,
     library_focus: FocusHandle,
     focus_library: bool,
@@ -90,6 +92,7 @@ pub struct PlayerView {
     folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
     theme_menu: Option<ThemeMenu>,
+    search_delay: Option<gpui::Task<()>>,
     seek_slider: Entity<Slider>,
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
@@ -133,8 +136,8 @@ impl PlayerView {
                 cx,
             )
         });
-        let filter =
-            cx.new(|cx| TextInput::new("Find in this list", String::new(), false, cx).clearable());
+        let search =
+            cx.new(|cx| TextInput::new("Search library", String::new(), false, cx).clearable());
         let seek_slider = cx.new(|_| Slider::new("seek", CommitMode::OnRelease));
         let volume_slider = cx.new(|_| Slider::new("volume-slider", CommitMode::Continuous));
         let library_loader = cx.new(|_| LibraryLoader::default());
@@ -249,15 +252,14 @@ impl PlayerView {
             ));
         }
         subscriptions.push(
-            cx.subscribe_in(&filter, window, |this, input, event, window, cx| {
+            cx.subscribe_in(&search, window, |this, input, event, window, cx| {
                 match event {
                     InputEvent::Change => {
-                        if this.browser.set_query(input.read(cx).value()) {
-                            this.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                        }
+                        this.search_changed(input.read(cx).value(), window, cx);
                         this.remember_folder(cx);
                     }
                     InputEvent::Submit | InputEvent::Next(_) => {
+                        this.submit_search(cx);
                         window.focus(&this.library_focus);
                         this.keyboard_active = true;
                         this.reveal_cursor();
@@ -286,7 +288,7 @@ impl PlayerView {
             server,
             username,
             password,
-            filter,
+            search,
             subscriptions,
             library_focus: cx.focus_handle(),
             focus_library: demo,
@@ -298,6 +300,7 @@ impl PlayerView {
             folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
             theme_menu: None,
+            search_delay: None,
             seek_slider,
             volume_slider,
             unmuted_volume: if initial_volume > 0. {
@@ -433,17 +436,25 @@ impl PlayerView {
             .into_any_element()
     }
 
-    fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
+    fn reset_library_load(&mut self, cx: &mut Context<Self>) {
+        self.search_delay = None;
         self.library_loader.update(cx, |loader, _| loader.cancel());
+        self.failures.clear(&Operation::Library);
+    }
+
+    fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
+        self.reset_library_load(cx);
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
         self.list_scroll = UniformListScrollHandle::new();
         self.reset_folder_columns();
-        let text = self.browser.state().filter_text.clone();
-        self.filter
+        let text = match &self.browser.state().page {
+            Page::Search(query) => query.clone(),
+            _ => String::new(),
+        };
+        self.search
             .update(cx, |field, cx| field.set_value(text, cx));
-        self.failures.clear(&Operation::Library);
     }
 
     fn navigate(&mut self, page: Page, remember: bool, cx: &mut Context<Self>) {
@@ -502,8 +513,10 @@ impl PlayerView {
     }
 
     fn navigation_changed(&mut self, cx: &mut Context<Self>) {
-        self.settings
-            .update(|value| value.last_section = self.browser.state().page.section());
+        if !matches!(self.browser.state().page, Page::Search(_)) {
+            self.settings
+                .update(|value| value.last_section = self.browser.state().page.section());
+        }
         self.reset_navigation_ui(cx);
         if !self.browser.state().loaded {
             if self.demo {
@@ -969,6 +982,7 @@ impl PlayerView {
             Page::Albums => "Albums".into(),
             Page::Songs => "Songs".into(),
             Page::Liked => "Liked songs".into(),
+            Page::Search(_) => "Search results".into(),
             Page::Artist(artist) => artist.name.clone(),
             Page::Album(album) => album.name.clone(),
             Page::Folder(path) => {
@@ -1037,7 +1051,7 @@ impl PlayerView {
         if self.theme_menu.is_some() {
             return;
         }
-        let editing = self.filter.focus_handle(cx).is_focused(window);
+        let editing = self.search.focus_handle(cx).is_focused(window);
         let Some(command) = self.keys.command_in_context(&event.keystroke, editing) else {
             return;
         };
@@ -1051,7 +1065,7 @@ impl PlayerView {
                     | Command::Section(_)
                     | Command::Cycle(_)
                     | Command::ToggleSidebar
-                    | Command::Find
+                    | Command::FocusSearch
                     | Command::Toggle
                     | Command::Shuffle
                     | Command::Next
@@ -1113,16 +1127,15 @@ impl PlayerView {
                 self.browser
                     .set_cursor(moved_cursor(self.browser.state().cursor, delta, count));
             }
-            Find => {
+            FocusSearch => {
                 self.show_help = false;
-                window.focus(&self.filter.focus_handle(cx));
+                window.focus(&self.search.focus_handle(cx));
             }
             Escape => {
                 if self.show_help {
                     self.show_help = false;
-                } else if !self.browser.state().query.is_empty() {
-                    self.filter.update(cx, |input, cx| input.clear(cx));
-                    self.browser.set_query(String::new());
+                } else if matches!(self.browser.state().page, Page::Search(_)) {
+                    self.back(cx);
                 } else {
                     self.failures = Failures::default();
                     self.connection
@@ -1250,14 +1263,17 @@ impl Render for PlayerView {
                     cx.notify();
                 }),
             );
-        let content = if self.browser.is_loading() && !self.browser.state().more {
-            empty_state(colors, "Loading your library…", "")
+        let content = if matches!(self.browser.state().page, Page::Search(_)) {
+            self.search_results(cx)
+        } else if self.browser.is_loading() && !self.browser.state().more {
+            empty_state(colors, "Loading your library…")
         } else {
             match self.browser.state().page {
                 Page::Artists => self.artists_list(cx),
                 Page::Albums | Page::Artist(_) => self.albums_list(cx),
                 Page::Songs | Page::Liked | Page::Album(_) => self.songs_list(cx),
                 Page::Folder(_) => self.folder_columns(cx),
+                Page::Search(_) => unreachable!(),
             }
         };
         let main = div()

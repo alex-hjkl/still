@@ -131,7 +131,7 @@ pub(super) fn count_label(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-pub(super) fn empty_state(colors: Palette, message: &str, query: &str) -> gpui::AnyElement {
+pub(super) fn empty_state(colors: Palette, message: &str) -> gpui::AnyElement {
     div()
         .flex_1()
         .flex()
@@ -146,10 +146,6 @@ pub(super) fn empty_state(colors: Palette, message: &str, query: &str) -> gpui::
                 .size(px(32.))
                 .text_color(rgb(colors.artwork_icon)),
         )
-        .child(if query.is_empty() {
-            message.to_owned()
-        } else {
-            "No matches in the loaded list".into()
-        })
+        .child(message.to_owned())
         .into_any_element()
 }
