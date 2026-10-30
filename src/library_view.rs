@@ -71,7 +71,7 @@ impl PlayerView {
             self.ui_probe.borrow_mut().find_summary = subtitle.clone();
         }
         let title = match &self.browser.state().page {
-            Page::Folder(path) if path.is_empty() => "Folders".to_owned(),
+            Page::Folder(path) if path.is_empty() => Section::Folders.info().label.to_owned(),
             Page::Folder(path) => {
                 let parts: Vec<_> = path
                     .rsplit('/')
@@ -79,7 +79,8 @@ impl PlayerView {
                     .take(2)
                     .collect();
                 format!(
-                    "Folders / {}",
+                    "{} / {}",
+                    Section::Folders.info().label,
                     parts.into_iter().rev().collect::<Vec<_>>().join(" / ")
                 )
             }
@@ -102,8 +103,12 @@ impl PlayerView {
                     .child(self.sidebar_toggle(window, cx))
                     .when(self.browser.has_history(), |view| {
                         view.child(
-                            toolbar_icon("back", "back", "Go back · h")
-                                .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
+                            toolbar_icon(
+                                "back",
+                                "back",
+                                shortcuts::BACK.hint(shortcuts::BACK.label),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.back(cx))),
                         )
                     })
                     .child(
@@ -133,10 +138,12 @@ impl PlayerView {
                             && !self.browser.is_loading(),
                         |view| {
                             view.child(
-                                toolbar_icon("refresh-folders", "refresh", "Refresh folders · r")
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.refresh_folders(cx)),
-                                    ),
+                                toolbar_icon(
+                                    "refresh-folders",
+                                    "refresh",
+                                    shortcuts::REFRESH.hint("Refresh folders"),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh_folders(cx))),
                             )
                         },
                     )
@@ -162,10 +169,14 @@ impl PlayerView {
                                     "play-page",
                                     "play",
                                     match self.browser.state().page {
-                                        Page::Folder(_) => "Play this folder and subfolders",
-                                        Page::Liked => "Play liked songs · Shift+Enter",
-                                        Page::Artist(_) => "Play all by this artist",
-                                        _ => "Play album · Shift+Enter",
+                                        Page::Folder(_) => shortcuts::PLAY_SELECTION
+                                            .hint("Play this folder and subfolders"),
+                                        Page::Liked => {
+                                            shortcuts::PLAY_SELECTION.hint("Play liked songs")
+                                        }
+                                        Page::Artist(_) => shortcuts::PLAY_SELECTION
+                                            .hint("Play all by this artist"),
+                                        _ => shortcuts::PLAY_SELECTION.hint("Play album"),
                                     },
                                 )
                                 .bg(rgb(SELECTED))
@@ -188,7 +199,7 @@ impl PlayerView {
                             .w(px(220.))
                             .flex_shrink_0()
                             .tooltip(|_, cx| {
-                                cx.new(|_| Hint::new("Find in loaded items · / or ⌘F"))
+                                cx.new(|_| Hint::new(shortcuts::FIND.hint("Find in loaded items")))
                                     .into()
                             })
                             .child(self.filter.clone()),
@@ -219,18 +230,7 @@ impl PlayerView {
                             .unwrap_or('♪')
                             .to_uppercase()
                             .to_string();
-                        div()
-                            .id(row)
-                            .w_full()
-                            .h(px(ARTIST_ROW_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .px_3()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(PANEL)))
+                        track_row(row, ARTIST_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
                                 view.bg(rgb(SELECTED))
                                     .border_1()
@@ -266,7 +266,7 @@ impl PlayerView {
                                 let artist = artist.clone();
                                 row_play_button(
                                     format!("play-artist-{}", artist.id).into(),
-                                    "Play artist · Shift+Enter",
+                                    shortcuts::PLAY_SELECTION.hint("Play artist"),
                                 )
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -311,18 +311,7 @@ impl PlayerView {
                             unreachable!()
                         };
                         let album = this.browser.state().albums[*index].clone();
-                        div()
-                            .id(row)
-                            .w_full()
-                            .h(px(ALBUM_ROW_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .px_3()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(PANEL)))
+                        track_row(row, ALBUM_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
                                 view.bg(rgb(SELECTED))
                                     .border_1()
@@ -369,7 +358,7 @@ impl PlayerView {
                                 let album = album.clone();
                                 row_play_button(
                                     format!("play-album-{}", album.id).into(),
-                                    "Play album · Shift+Enter",
+                                    shortcuts::PLAY_SELECTION.hint("Play album"),
                                 )
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {

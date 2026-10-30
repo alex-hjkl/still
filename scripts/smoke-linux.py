@@ -35,15 +35,26 @@ def scenario(launch, tracks):
     folder = "/Music/Коллекция 🎵/Очень длинное название альбома"
     return [
         expect(connected=True, loaded=True, page="artists"),
+        expect(footer_hints=["j k Move", "Enter Open", "⇧ Enter Play artist", "/ Find"], footer_fits=True),
+        key("shift-enter"), expect(failures=["retry-collection"]),
+        dict(action="retry", operation="collection"),
+        expect(page="artists", playback="playing", current_track=tracks[0]["id"],
+               queue_len=len(tracks), queue_last=tracks[-1]["id"], failures=[]),
+        key("space"), expect(playback="paused"),
         key("l"), expect(page="artist", loaded=True),
+        key("shift-enter"),
+        expect(page="artist", playback="playing", current_track=tracks[0]["id"],
+               queue_len=5, queue_last=tracks[4]["id"]),
+        key("space"), expect(playback="paused"),
         key("l"), expect(page="album", loaded=True),
         key("j"), expect(selected=tracks[1]["id"]),
         key("k"), expect(selected=tracks[0]["id"]),
         key("enter"), expect(playback="playing", current_track=tracks[0]["id"]),
         dict(action="wait", milliseconds=1800),
-        key("space"), expect(playback="paused", audio_position_min=1),
+        key("space"), expect(playback="paused", audio_position_min=1,
+                             duration=180, seek_enabled=True, seek_progress_min=0.005),
         key("right"), dict(action="wait", milliseconds=200),
-        expect(playback="paused", audio_position_min=10),
+        expect(playback="paused", audio_position_min=10, seek_progress_min=0.05),
         key("left"), expect(playback="paused", audio_position_max=4),
         key("space"), expect(playback="playing"),
         key("]"), expect(playback="playing", current_track=tracks[1]["id"]),
@@ -58,6 +69,12 @@ def scenario(launch, tracks):
         key("f1"), expect(show_help=True), key("escape"), expect(show_help=False),
         dict(action="resize", size=[780, 640]), expect(size=[780, 640]),
         dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
+        key("cmd-3"), expect(page="songs", loaded=True),
+        key("home"), expect(selected=tracks[0]["id"]),
+        key("f"), expect(failures=[f"retry-like-{tracks[0]['id']}"]),
+        dict(action="retry", operation=f"like:{tracks[0]['id']}"),
+        key("cmd-5"), expect(page="liked", loaded=True, selected=tracks[0]["id"], failures=[]),
+        key("f"), expect(selected="", failures=[]),
         key("cmd-3"), expect(page="songs", loaded=True),
         key("/"), dict(action="text", text="Paper"), expect(filter="Paper"),
         key("enter"), expect(selected=tracks[1]["id"]),
@@ -89,6 +106,8 @@ def main():
         target = ROOT / target
     binary = target / "release/still"
     albums, tracks = library()
+    # Reproduce incomplete Navidrome metadata; the WAV still reports its length.
+    tracks[0].update(duration=0, artist="[Unknown Artist]", album="[Unknown Album]")
     for track in tracks[:5]:
         track["path"] = f"/Music/Коллекция 🎵/Очень длинное название альбома/{track['track']:02} {track['title']}.wav"
     audio = io.BytesIO()
@@ -99,12 +118,16 @@ def main():
         wav.writeframes(b"\0\0" * 8000 * 180)
     image = cover(0)
     requests = []
+    liked = set()
+    fail_artist = True
+    fail_like = True
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *unused):
             pass
 
         def do_GET(self):
+            nonlocal fail_artist, fail_like
             parsed = urlsplit(self.path)
             method = parsed.path.rsplit("/", 1)[-1].removesuffix(".view")
             params = parse_qs(parsed.query)
@@ -114,7 +137,11 @@ def main():
             if method == "getArtists":
                 body["artists"] = {"index": [{"artist": [dict(id="artist-0", name="Mira Sol", albumCount=len(albums))]}]}
             elif method == "getArtist":
-                body["artist"] = {"album": albums}
+                if fail_artist:
+                    fail_artist = False
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    body["artist"] = {"album": albums}
             elif method == "getAlbumList2":
                 body["albumList2"] = {"album": albums}
             elif method == "getAlbum":
@@ -125,7 +152,15 @@ def main():
                 count = int(params.get("songCount", ["200"])[0])
                 body["searchResult3"] = {"song": tracks[start:start + count]}
             elif method == "getStarred2":
-                body["starred2"] = {"song": []}
+                body["starred2"] = {"song": [track for track in tracks if track["id"] in liked]}
+            elif method == "star":
+                if fail_like:
+                    fail_like = False
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    liked.add(item)
+            elif method == "unstar":
+                liked.discard(item)
             payload = audio.getvalue() if method == "stream" else image if method == "getCoverArt" else json.dumps({"subsonic-response": body}).encode()
             total = len(payload)
             byte_range = self.headers.get("Range") if method == "stream" else None

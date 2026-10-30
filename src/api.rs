@@ -1,4 +1,7 @@
-use crate::requests::Cancellation;
+use crate::{
+    models::{Album, Artist, PAGE_SIZE, Song, sort_albums},
+    requests::Cancellation,
+};
 use anyhow::{Context, Result, bail};
 use rand::{RngExt, distr::Alphanumeric};
 use reqwest::{Url, blocking::Client};
@@ -6,57 +9,6 @@ use serde::Deserialize;
 #[cfg(test)]
 use serde_json::Value;
 use std::time::Duration;
-
-pub const PAGE_SIZE: usize = 200;
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Artist {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub album_count: usize,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Album {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub artist: String,
-    #[serde(default)]
-    pub year: Option<u32>,
-    #[serde(default)]
-    pub song_count: usize,
-    #[serde(default)]
-    pub cover_art: Option<String>,
-    #[serde(default)]
-    pub song: Vec<Song>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Song {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub artist: String,
-    #[serde(default)]
-    pub album: String,
-    #[serde(default)]
-    pub duration: u64,
-    #[serde(default)]
-    pub track: u32,
-    #[serde(default)]
-    pub disc_number: u32,
-    #[serde(default)]
-    pub cover_art: Option<String>,
-    #[serde(default)]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub starred: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct Envelope {
@@ -334,10 +286,6 @@ impl Navidrome {
     }
 }
 
-pub fn sort_albums(albums: &mut [Album]) {
-    albums.sort_by(|a, b| a.year.cmp(&b.year).then_with(|| a.name.cmp(&b.name)));
-}
-
 fn auth_token(password: &str, salt: &str) -> String {
     format!("{:x}", md5::compute(format!("{password}{salt}")))
 }
@@ -357,13 +305,11 @@ fn decode_response(envelope: Envelope) -> Result<ApiResponse> {
     Ok(response)
 }
 
-pub fn time_label(seconds: u64) -> String {
-    format!("{}:{:02}", seconds / 60, seconds % 60)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::time_label;
+    use crate::test_http::{Response, Server};
 
     #[test]
     fn library_identity_is_stable_for_a_login_and_distinguishes_accounts_and_servers() {
@@ -447,60 +393,31 @@ mod tests {
         assert!(Navidrome::new("https://music.example", "", "pass").is_err());
     }
 
-    fn folder_server(pages: Vec<Value>) -> (Navidrome, std::thread::JoinHandle<()>) {
+    fn folder_server(pages: Vec<Value>) -> (Navidrome, Server) {
         folder_server_with_cancellation(pages, None)
     }
 
     fn folder_server_with_cancellation(
         pages: Vec<Value>,
         cancel_after_first: Option<Cancellation>,
-    ) -> (Navidrome, std::thread::JoinHandle<()>) {
-        use std::io::{BufRead, BufReader, Write};
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            for (page, songs) in pages.into_iter().enumerate() {
-                let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(socket.try_clone().unwrap());
-                let mut request = String::new();
-                reader.read_line(&mut request).unwrap();
-                let path = request.split_whitespace().nth(1).unwrap();
-                let url = Url::parse(&format!("http://localhost{path}")).unwrap();
-                assert_eq!(url.path(), "/rest/search3.view");
-                let params: std::collections::HashMap<_, _> =
-                    url.query_pairs().into_owned().collect();
-                assert_eq!(params["songCount"], "500");
-                assert_eq!(params["songOffset"], (page * 500).to_string());
-                assert_eq!(params["artistCount"], "0");
-                assert_eq!(params["albumCount"], "0");
-                assert_eq!(params["query"], "");
-                loop {
-                    let mut header = String::new();
-                    reader.read_line(&mut header).unwrap();
-                    if header.trim().is_empty() {
-                        break;
-                    }
-                }
-                let payload = json!({"subsonic-response": {
-                    "status": "ok", "searchResult3": {"song": songs}
-                }})
-                .to_string();
-                if page == 0
-                    && let Some(cancellation) = &cancel_after_first
-                {
-                    cancellation.cancel();
-                }
-                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", payload.len(), payload).unwrap();
+    ) -> (Navidrome, Server) {
+        let server = Server::new(pages.into_iter().enumerate().map(|(page, songs)| {
+            let response = Response::subsonic("search3", json!({"searchResult3": {"song": songs}}))
+                .query("songCount", 500)
+                .query("songOffset", page * 500)
+                .query("artistCount", 0)
+                .query("albumCount", 0)
+                .query("query", "");
+            if page == 0
+                && let Some(cancellation) = cancel_after_first.clone()
+            {
+                response.before_reply(move || cancellation.cancel())
+            } else {
+                response
             }
-        });
-        (
-            Navidrome::new(&format!("http://{address}"), "user", "password").unwrap(),
-            server,
-        )
+        }));
+        let client = Navidrome::new(&server.url, "user", "password").unwrap();
+        (client, server)
     }
 
     #[test]
@@ -517,7 +434,7 @@ mod tests {
             folder_server_with_cancellation(vec![json!(first)], Some(cancellation.clone()));
         let error = client.folder_library(&cancellation).err().unwrap();
         assert_eq!(error.to_string(), "Loading canceled");
-        server.join().unwrap();
+        server.finish();
     }
 
     #[test]
@@ -548,7 +465,7 @@ mod tests {
                 .id,
             "last"
         );
-        server.join().unwrap();
+        server.finish();
     }
 
     #[test]
@@ -563,7 +480,7 @@ mod tests {
             .to_string();
         assert!(error.contains("Report Real Path"));
         assert!(error.contains("Still"));
-        server.join().unwrap();
+        server.finish();
     }
 
     #[test]
@@ -584,15 +501,11 @@ mod tests {
                 .to_string()
                 .contains("changed")
         );
-        server.join().unwrap();
+        server.finish();
     }
 
     #[test]
     fn browses_library_over_http_with_pagination_and_disc_order() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
         let fixtures = vec![
             ("ping", vec![], json!({})),
             (
@@ -673,42 +586,21 @@ mod tests {
                 json!({"albumList2":{"album":"invalid"}}),
             ),
         ];
-        let server = std::thread::spawn(move || {
-            for (method, expected, body) in fixtures {
-                let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(socket.try_clone().unwrap());
-                let mut request = String::new();
-                reader.read_line(&mut request).unwrap();
-                let path = request.split_whitespace().nth(1).unwrap();
-                let url = Url::parse(&format!("http://localhost{path}")).unwrap();
-                assert_eq!(url.path(), format!("/music/rest/{method}.view"));
-                let pairs: std::collections::HashMap<_, _> =
-                    url.query_pairs().into_owned().collect();
-                assert_eq!(pairs["t"], auth_token("password", &pairs["s"]));
-                assert_eq!(pairs["u"], "user");
-                for (key, value) in expected {
-                    assert_eq!(pairs[key], value);
-                }
-                loop {
-                    let mut header = String::new();
-                    reader.read_line(&mut header).unwrap();
-                    if header.trim().is_empty() {
-                        break;
-                    }
-                }
-                let mut response = json!({"status":"ok", "version":"1.16.1"});
-                for (key, value) in body.as_object().unwrap() {
-                    response[key] = value.clone();
-                }
-                let payload = json!({"subsonic-response":response}).to_string();
-                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", payload.len(), payload).unwrap();
+        let server = Server::new(fixtures.into_iter().map(|(method, expected, body)| {
+            let mut response = Response::subsonic(method, body)
+                .prefix("/music")
+                .query("u", "user")
+                .check(|url| {
+                    let pairs: std::collections::HashMap<_, _> =
+                        url.query_pairs().into_owned().collect();
+                    assert_eq!(pairs["t"], auth_token("password", &pairs["s"]));
+                });
+            for (key, value) in expected {
+                response = response.query(key, value);
             }
-        });
-        let client =
-            Navidrome::new(&format!("http://{address}/music"), "user", "password").unwrap();
+            response
+        }));
+        let client = Navidrome::new(&format!("{}/music", server.url), "user", "password").unwrap();
         client.ping().unwrap();
         let artists = client.artists().unwrap();
         assert_eq!(artists.len(), 2);
@@ -760,6 +652,6 @@ mod tests {
                 .to_string()
                 .contains("invalid JSON")
         );
-        server.join().unwrap();
+        server.finish();
     }
 }

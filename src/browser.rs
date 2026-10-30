@@ -1,10 +1,10 @@
 use crate::{
-    api::{Album, Artist, Navidrome, PAGE_SIZE, Song},
     folders::{FolderLibrary, file_name, parent_path},
+    models::{Album, Artist, PAGE_SIZE, Song},
+    navigation::Section,
     requests::{Cancellation, Requests},
-    settings::{FolderSelection, SavedFolder, Section},
+    settings::{FolderSelection, SavedFolder},
 };
-use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Debug)]
@@ -59,23 +59,6 @@ pub enum LibraryData {
 pub struct LibraryRequest {
     pub page: Page,
     pub offset: usize,
-}
-
-impl LibraryRequest {
-    pub fn run(&self, client: Navidrome, cancellation: &Cancellation) -> Result<LibraryData> {
-        cancellation.check()?;
-        let data = match &self.page {
-            Page::Artists => LibraryData::Artists(client.artists()?),
-            Page::Albums => LibraryData::Albums(client.albums(self.offset)?),
-            Page::Songs => LibraryData::Songs(client.songs(self.offset)?),
-            Page::Liked => LibraryData::Songs(client.liked_songs()?),
-            Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
-            Page::Album(album) => LibraryData::Album(client.album(&album.id)?),
-            Page::Folder(_) => LibraryData::Folders(client.folder_library(cancellation)?),
-        };
-        cancellation.check()?;
-        Ok(data)
-    }
 }
 
 #[derive(Clone)]
@@ -542,6 +525,7 @@ impl Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Navidrome;
     use crate::failure::{Failure, RetryAction};
     use serde_json::json;
 
@@ -827,59 +811,22 @@ mod tests {
 
     #[test]
     fn retry_fetches_the_failed_page_over_http_and_keeps_existing_results() {
-        use std::{
-            io::{BufRead, BufReader, Write},
-            net::TcpListener,
-            time::Duration,
-        };
+        use crate::test_http::{Response, Server};
         for page in [Page::Songs, Page::Albums] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
             let songs = matches!(page, Page::Songs);
-            let server = std::thread::spawn(move || {
-                for failed in [true, false] {
-                    let (mut socket, _) = listener.accept().unwrap();
-                    socket
-                        .set_read_timeout(Some(Duration::from_secs(5)))
-                        .unwrap();
-                    let mut reader = BufReader::new(socket.try_clone().unwrap());
-                    let mut first = String::new();
-                    reader.read_line(&mut first).unwrap();
-                    let url = reqwest::Url::parse(&format!(
-                        "http://localhost{}",
-                        first.split_whitespace().nth(1).unwrap()
-                    ))
-                    .unwrap();
-                    let params: std::collections::HashMap<_, _> =
-                        url.query_pairs().into_owned().collect();
-                    assert_eq!(params[if songs { "songOffset" } else { "offset" }], "200");
-                    assert_eq!(
-                        url.path(),
-                        if songs {
-                            "/rest/search3.view"
-                        } else {
-                            "/rest/getAlbumList2.view"
-                        }
-                    );
-                    loop {
-                        let mut header = String::new();
-                        reader.read_line(&mut header).unwrap();
-                        if header.trim().is_empty() {
-                            break;
-                        }
-                    }
-                    let body = if failed {
-                        json!({"status":"failed", "error":{"code":50}})
-                    } else if songs {
-                        json!({"status":"ok", "searchResult3":{"song":[{"id":"last", "title":"Track 200"}]}})
-                    } else {
-                        json!({"status":"ok", "albumList2":{"album":[{"id":"last", "name":"Альбом 200"}]}})
-                    };
-                    let payload = json!({"subsonic-response": body}).to_string();
-                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", payload.len(), payload).unwrap();
-                }
-            });
-            let client = Navidrome::new(&format!("http://{address}"), "user", "pass").unwrap();
+            let method = if songs { "search3" } else { "getAlbumList2" };
+            let offset = if songs { "songOffset" } else { "offset" };
+            let success = if songs {
+                json!({"searchResult3":{"song":[{"id":"last", "title":"Track 200"}]}})
+            } else {
+                json!({"albumList2":{"album":[{"id":"last", "name":"Альбом 200"}]}})
+            };
+            let server = Server::new([
+                Response::subsonic(method, json!({"status":"failed", "error":{"code":50}}))
+                    .query(offset, 200),
+                Response::subsonic(method, success).query(offset, 200),
+            ]);
+            let client = Navidrome::new(&server.url, "user", "pass").unwrap();
             let mut browser = Browser::default();
             browser.navigate(page, false);
             let data = if songs {
@@ -913,7 +860,7 @@ mod tests {
             } else {
                 assert_eq!(browser.state.albums[200].id, "last");
             }
-            server.join().unwrap();
+            server.finish();
         }
     }
 }

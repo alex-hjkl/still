@@ -1,10 +1,28 @@
 //! Owns pending library work and delivers completions without borrowing a view.
 use crate::{
     api::Navidrome,
-    browser::{LibraryData, LibraryRequest},
+    browser::{LibraryData, LibraryRequest, Page},
     requests::Cancellation,
 };
+use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
+
+impl LibraryRequest {
+    pub fn run(&self, client: Navidrome, cancellation: &Cancellation) -> Result<LibraryData> {
+        cancellation.check()?;
+        let data = match &self.page {
+            Page::Artists => LibraryData::Artists(client.artists()?),
+            Page::Albums => LibraryData::Albums(client.albums(self.offset)?),
+            Page::Songs => LibraryData::Songs(client.songs(self.offset)?),
+            Page::Liked => LibraryData::Songs(client.liked_songs()?),
+            Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
+            Page::Album(album) => LibraryData::Album(client.album(&album.id)?),
+            Page::Folder(_) => LibraryData::Folders(client.folder_library(cancellation)?),
+        };
+        cancellation.check()?;
+        Ok(data)
+    }
+}
 
 pub struct LibraryReady;
 pub struct LoadContext {

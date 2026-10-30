@@ -1,3 +1,4 @@
+use crate::navigation::Section;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,38 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::oneshot;
-
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Section {
-    #[default]
-    Artists,
-    Albums,
-    Songs,
-    Folders,
-    Liked,
-}
-
-impl Section {
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            0 => Self::Artists,
-            1 => Self::Albums,
-            2 => Self::Songs,
-            3 => Self::Folders,
-            _ => Self::Liked,
-        }
-    }
-    pub fn index(self) -> usize {
-        match self {
-            Self::Artists => 0,
-            Self::Albums => 1,
-            Self::Songs => 2,
-            Self::Folders => 3,
-            Self::Liked => 4,
-        }
-    }
-}
 
 // Connection details stay in Keychain. This file only contains UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

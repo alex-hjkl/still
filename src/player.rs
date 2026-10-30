@@ -182,10 +182,20 @@ pub struct Playback {
     pub generation: u64,
     pub status: PlaybackStatus,
     pub position: Duration,
+    pub duration: Option<Duration>,
     pub warning: Option<(u64, String)>,
 }
 
 impl Playback {
+    pub fn duration_or(&self, metadata_duration: u64) -> u64 {
+        if metadata_duration > 0 {
+            metadata_duration
+        } else {
+            self.duration
+                .map_or(0, |duration| duration.as_secs_f64().ceil() as u64)
+        }
+    }
+
     pub fn is_loading(&self) -> bool {
         self.status == PlaybackStatus::Loading
     }
@@ -363,6 +373,9 @@ fn run_audio_worker(
             }
             Ok(Command::Prepared(id, result)) if id == generation => {
                 let result = result.and_then(|source| {
+                    let duration = source
+                        .total_duration()
+                        .filter(|duration| !duration.is_zero());
                     let next = connect()?;
                     next.set_volume(volume);
                     if paused {
@@ -370,6 +383,7 @@ fn run_audio_worker(
                     }
                     next.append(source);
                     sink = Some(Arc::new(next));
+                    worker_state.send_modify(|state| state.duration = duration);
                     Ok(())
                 });
                 worker_state.send_modify(|state| {
@@ -399,6 +413,7 @@ fn run_audio_worker(
             }
             Ok(Command::Seek(request, duration)) => {
                 if let Some(sink) = &sink {
+                    let duration = worker_state.borrow().duration_or(duration);
                     seeking.request(request, sink.get_pos(), duration);
                 }
             }
@@ -810,6 +825,10 @@ mod tests {
                         }
                 })
                 .await;
+            assert_eq!(
+                fixture.state.borrow().duration,
+                next.then(|| Duration::from_secs(1))
+            );
             fixture.release.send(()).unwrap();
             // A late completion/failure belongs to the old track only.
             fixture
@@ -1024,6 +1043,7 @@ mod tests {
             .unwrap();
         assert_eq!(source.sample_rate().get(), 8000);
         assert_eq!(source.channels().get(), 1);
+        assert_eq!(source.total_duration(), Some(Duration::from_secs(1)));
         assert!((source.next().unwrap() - 0.25).abs() < 0.001);
         source.try_seek(Duration::from_millis(500)).unwrap();
         assert!((source.next().unwrap() - 0.25).abs() < 0.001);
@@ -1031,6 +1051,40 @@ mod tests {
         assert!((source.next().unwrap() - 0.25).abs() < 0.001);
         assert_eq!(source.count(), 7999);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn missing_server_duration_uses_audio_duration_but_preserves_known_metadata() {
+        let mut playback = Playback::default();
+        assert_eq!(playback.duration_or(0), 0);
+        assert_eq!(playback.duration_or(180), 180);
+        playback.duration = Some(Duration::from_millis(180_250));
+        assert_eq!(playback.duration_or(0), 181);
+        assert_eq!(playback.duration_or(200), 200);
+        playback.duration = Some(Duration::from_millis(250));
+        assert_eq!(playback.duration_or(0), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_duration_seeks_are_clamped_to_the_decoded_audio_duration() {
+        let mut fixture = SeekFixture::new();
+        fixture.wait(|state| state.duration.is_some()).await;
+        assert_eq!(
+            fixture.state.borrow().duration,
+            Some(Duration::from_secs(120))
+        );
+        fixture
+            .commands
+            .send(Command::Seek(Seek::Absolute(Duration::from_secs(200)), 0))
+            .unwrap();
+        assert_eq!(
+            fixture
+                .entered
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap(),
+            Duration::from_secs(120)
+        );
+        fixture.release.send(()).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

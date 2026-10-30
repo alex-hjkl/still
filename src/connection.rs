@@ -42,7 +42,6 @@ pub struct ConnectionController {
     pub client: Option<Navidrome>,
     pub remember: bool,
     pub saved: bool,
-    pub session_id: u64,
     pub activity: Activity,
     revision: u64,
     operation: u64,
@@ -60,7 +59,6 @@ impl ConnectionController {
             client: None,
             remember: !from_environment,
             saved: false,
-            session_id: 0,
             activity: Activity::Idle,
             revision: 0,
             operation: 0,
@@ -349,7 +347,6 @@ impl ConnectionController {
             return false;
         }
         self.client = None;
-        self.session_id = self.session_id.wrapping_add(1);
         self.operation = self.operation.wrapping_add(1);
         self.task = None;
         self.failure = None;
@@ -372,8 +369,8 @@ fn authenticate(connection: &Connection) -> Result<Navidrome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
+    use crate::test_http::{Response, Server};
+    use serde_json::json;
 
     fn credentials() -> Connection {
         Connection {
@@ -395,37 +392,12 @@ mod tests {
 
     #[test]
     fn authentication_does_not_require_or_load_the_artists_section() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            let mut reader = BufReader::new(socket.try_clone().unwrap());
-            let mut request = String::new();
-            reader.read_line(&mut request).unwrap();
-            assert!(request.starts_with("GET /rest/ping.view?"));
-            loop {
-                let mut header = String::new();
-                reader.read_line(&mut header).unwrap();
-                if header.trim().is_empty() {
-                    break;
-                }
-            }
-            let body = r#"{"subsonic-response":{"status":"ok"}}"#;
-            write!(
-                socket,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        });
+        let server = Server::new([Response::subsonic("ping", json!({}))]);
         let result = authenticate(&Connection {
-            server: format!("http://{address}"),
+            server: server.url.clone(),
             ..credentials()
         });
-        server.join().unwrap();
+        server.finish();
         assert!(result.is_ok());
     }
 

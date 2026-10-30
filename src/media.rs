@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 use crate::player::PlaybackStatus;
-use crate::{api::Song, player::Playback};
+use crate::{models::Song, player::Playback};
 
 #[derive(Clone, Debug, PartialEq)]
 // Native media command producers are currently implemented only on macOS.

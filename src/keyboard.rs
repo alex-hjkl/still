@@ -1,3 +1,4 @@
+use crate::navigation::Section;
 use gpui::{Keystroke, Modifiers};
 use std::time::{Duration, Instant};
 
@@ -33,6 +34,15 @@ pub enum Command {
     Prefix,
 }
 
+impl Command {
+    fn available_while_editing(self) -> bool {
+        matches!(
+            self,
+            Self::Escape | Self::Find | Self::ToggleSidebar | Self::Section(_)
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct Keys {
     prefix: Option<Instant>,
@@ -45,9 +55,9 @@ pub fn section_hints(modifiers: Modifiers) -> bool {
 fn section_shortcut(stroke: &Keystroke) -> Option<usize> {
     section_hints(stroke.modifiers)
         .then(|| {
-            ["1", "2", "3", "4", "5"]
+            Section::ALL
                 .iter()
-                .position(|key| stroke.key == *key)
+                .position(|section| stroke.key == section.key)
         })
         .flatten()
 }
@@ -58,15 +68,12 @@ impl Keys {
     }
 
     pub fn command_in_context(&mut self, stroke: &Keystroke, editing: bool) -> Option<Command> {
-        if editing
-            && stroke.key != "escape"
-            && !(stroke.modifiers.platform && matches!(stroke.key.as_str(), "f" | "b"))
-            && section_shortcut(stroke).is_none()
-        {
+        let command = self.command(stroke)?;
+        if editing && !command.available_while_editing() {
             self.reset();
             return None;
         }
-        self.command(stroke)
+        Some(command)
     }
 
     pub fn command(&mut self, stroke: &Keystroke) -> Option<Command> {
@@ -80,67 +87,17 @@ impl Keys {
         if m.alt {
             return None;
         }
-        if m.platform {
-            if let Some(index) = section_shortcut(stroke) {
-                return Some(Section(index));
-            }
-            return match (key, m.control, m.shift) {
-                ("f", false, false) => Some(Find),
-                ("b", false, false) => Some(ToggleSidebar),
-                _ => None,
-            };
+        if let Some(index) = section_shortcut(stroke) {
+            return Some(Section(index));
         }
-        if m.control {
-            return match (key, m.shift) {
-                ("d", false) => Some(HalfDown),
-                ("u", false) => Some(HalfUp),
-                ("f", false) => Some(PageDown),
-                ("b", false) => Some(PageUp),
-                _ => None,
-            };
-        }
-        if key == "g" && !m.shift {
+        if key == "g" && !m.shift && !m.platform && !m.control {
             if pending {
                 return Some(First);
             }
             self.prefix = Some(Instant::now());
             return Some(Prefix);
         }
-        Some(match (key, m.shift) {
-            ("j", false) => Down,
-            ("k", false) => Up,
-            ("down", false) => Down,
-            ("up", false) => Up,
-            ("h", false) => Back,
-            ("l", false) => Open,
-            ("left", false) => Seek(-10),
-            ("right", false) => Seek(10),
-            ("enter", false) => Open,
-            ("enter", true) => PlaySelection,
-            ("backspace", false) => Back,
-            ("home", false) => First,
-            ("end", false) | ("g", true) | ("G", _) => Last,
-            ("pagedown", false) => PageDown,
-            ("pageup", false) => PageUp,
-            ("/", false) => Find,
-            ("escape", _) => Escape,
-            ("space" | " ", false) => Toggle,
-            ("s", false) => Shuffle,
-            ("]", false) => Next,
-            ("[", false) => Previous,
-            ("f", false) => Like,
-            ("f", true) | ("F", _) => LikeCurrent,
-            ("h", true) | ("H", _) => Seek(-10),
-            ("l", true) | ("L", _) => Seek(10),
-            ("-", false) => Volume(-0.05),
-            ("+", _) | ("=", _) => Volume(0.05),
-            ("tab", false) => Cycle(1),
-            ("tab", true) => Cycle(-1),
-            ("?" | "f1", _) | ("/", true) => Help,
-            ("r", false) => Refresh,
-            ("e", false) => More,
-            _ => return None,
-        })
+        crate::shortcuts::command(stroke)
     }
 }
 
@@ -175,6 +132,10 @@ mod tests {
             ("h", Command::Back),
             ("l", Command::Open),
             ("ctrl-d", Command::HalfDown),
+            ("pagedown", Command::PageDown),
+            ("pageup", Command::PageUp),
+            ("home", Command::First),
+            ("end", Command::Last),
             ("cmd-f", Command::Find),
         ] {
             assert_eq!(keys.command(&key(stroke)), Some(expected));

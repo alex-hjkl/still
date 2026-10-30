@@ -210,17 +210,8 @@ impl PlayerView {
                             let color = if active { ACCENT } else { TEXT };
                             let path = path.clone();
                             let selected_entry = entries[row].clone();
-                            div()
-                                .id(row)
-                                .h(px(FOLDER_ROW_HEIGHT))
-                                .w_full()
-                                .flex()
-                                .items_center()
+                            track_row(row, FOLDER_ROW_HEIGHT)
                                 .gap_2()
-                                .px_3()
-                                .border_b_1()
-                                .border_color(rgb(BORDER))
-                                .cursor_pointer()
                                 .when(selected == Some(row), |view| view.bg(rgb(SELECTED)))
                                 .when(column == Column::Current && this.cursor_on(row), |view| {
                                     view.border_1().border_color(rgb(KEYBOARD_FOCUS))
@@ -265,7 +256,8 @@ impl PlayerView {
                                     view.child(
                                         row_play_button(
                                             format!("play-folder-{child}").into(),
-                                            "Play folder and subfolders · Shift+Enter",
+                                            shortcuts::PLAY_SELECTION
+                                                .hint("Play folder and subfolders"),
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
@@ -299,6 +291,21 @@ impl PlayerView {
 
     fn song_preview(&self, entry: &BrowserEntry, cx: &mut Context<Self>) -> gpui::AnyElement {
         let song = self.entry_song(entry).expect("selected song");
+        let duration = if self
+            .transport
+            .queue()
+            .current()
+            .is_some_and(|current| current.id == song.id)
+        {
+            self.transport.duration()
+        } else {
+            song.duration
+        };
+        let duration_label = if duration > 0 {
+            time_label(duration)
+        } else {
+            "--:--".into()
+        };
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().preview_song = Some(song.id.clone());
@@ -323,7 +330,7 @@ impl PlayerView {
                     .gap_4()
                     .child(artwork(
                         self.connection.read(cx).client.as_ref(),
-                        song.cover_art.as_deref(),
+                        song.artwork_id(),
                         96.,
                     ))
                     .child(
@@ -356,9 +363,9 @@ impl PlayerView {
                             .text_color(rgb(MUTED))
                             .whitespace_normal()
                             .child(if song.album.is_empty() {
-                                time_label(song.duration)
+                                duration_label
                             } else {
-                                format!("{} · {}", song.album, time_label(song.duration))
+                                format!("{} · {}", song.album, duration_label)
                             }),
                     )
                     .child(

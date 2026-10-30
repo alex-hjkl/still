@@ -32,7 +32,7 @@ pub struct SystemMedia {
     registrations: Vec<Registration>,
     available: Arc<AtomicBool>,
     events: mpsc::Receiver<MediaCommand>,
-    last: Option<(String, u64, State)>,
+    last: Option<(String, u64, State, u64)>,
 }
 
 impl SystemMedia {
@@ -158,7 +158,13 @@ impl SystemMedia {
             return;
         };
         let state = state(playback);
-        let next = (song.id.clone(), playback.position.as_secs(), state);
+        let duration_seconds = playback.duration_or(song.duration);
+        let next = (
+            song.id.clone(),
+            playback.position.as_secs(),
+            state,
+            duration_seconds,
+        );
         if self.last.as_ref() == Some(&next) {
             return;
         }
@@ -183,8 +189,8 @@ impl SystemMedia {
             ];
             let mut values: Vec<&AnyObject> =
                 vec![&title, &artist, &album, &elapsed, &rate, &media_type];
-            let duration = NSNumber::numberWithDouble(song.duration as f64);
-            if song.duration > 0 {
+            let duration = NSNumber::numberWithDouble(duration_seconds as f64);
+            if duration_seconds > 0 {
                 keys.push(MPMediaItemPropertyPlaybackDuration);
                 values.push(&duration);
             }

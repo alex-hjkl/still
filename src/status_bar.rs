@@ -2,30 +2,7 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut hints = vec![("j k", "Move")];
-        match self.browser.state().page {
-            Page::Artists => hints.extend([("Enter", "Open"), ("⇧ Enter", "Play artist")]),
-            Page::Albums | Page::Artist(_) => {
-                hints.extend([("Enter", "Open"), ("⇧ Enter", "Play album")])
-            }
-            Page::Folder(_) => hints.extend([
-                ("Enter", "Open / play"),
-                ("h", "Parent"),
-                ("⇧ Enter", "Play folder"),
-            ]),
-            Page::Album(_) => hints.extend([
-                ("Enter", "Play song"),
-                ("⇧ Enter", "Play album"),
-                ("f", "Like"),
-            ]),
-            Page::Liked => hints.extend([
-                ("Enter", "Play song"),
-                ("⇧ Enter", "Play all"),
-                ("f", "Unlike"),
-            ]),
-            Page::Songs => hints.extend([("Enter", "Play"), ("f", "Like")]),
-        }
-        hints.push(("/", "Find"));
+        let hints = shortcuts::footer_hints(&self.browser.state().page);
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().footer_hints = hints
@@ -41,7 +18,7 @@ impl PlayerView {
             .items_center()
             .gap_x_4()
             .gap_y_1()
-            .when_some(self.pending_collection.as_ref(), |view, collection| {
+            .when_some(self.collections.read(cx).pending(), |view, collection| {
                 view.child(
                     div()
                         .min_w_0()
@@ -49,7 +26,7 @@ impl PlayerView {
                         .child(format!("Loading {}…", collection.name())),
                 )
             })
-            .when(self.pending_collection.is_none(), |view| {
+            .when(self.collections.read(cx).pending().is_none(), |view| {
                 view.children(hints.into_iter().map(|(key, label)| {
                     div()
                         .flex_shrink_0()
@@ -96,9 +73,9 @@ impl PlayerView {
                         .cursor_pointer()
                         .text_color(rgb(ACCENT))
                         .child(if self.browser.is_loading() {
-                            "Loading…"
+                            "Loading…".to_owned()
                         } else {
-                            "Load more · e"
+                            shortcuts::MORE.hint(shortcuts::MORE.label)
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.load_more(cx))),
                 )
@@ -108,7 +85,7 @@ impl PlayerView {
                     .id("status-help")
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .child("? Shortcuts")
+                    .child(format!("{} Shortcuts", shortcuts::HELP.footer))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_help = true;
                         window.focus(&this.library_focus);

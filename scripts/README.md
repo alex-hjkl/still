@@ -75,8 +75,12 @@ The runner builds the release with `ui-tests`, opens the real GPUI window,
 starts a loopback fixture server, streams synthetic silent WAV audio, and
 checks navigation, Unicode folders, help, resizing, filter entry, playback,
 pause/resume, seeking, Next and restoring preferences on a second launch.
+It also exercises artist and album queues, failed collection/like writes and
+their retries, and adding/removing a song in Liked songs.
 It verifies audio position advancement and seek results, with no dependency
-on the macOS Now Playing bridge. Reports and logs stay in ignored
+on the macOS Now Playing bridge. The first track reports zero server duration;
+the check verifies that its decoded duration enables the slider and that progress
+advances during playback and seeking. Reports and logs stay in ignored
 `.local/ui-test-results/linux-*` directories. No real saved connection or
 library is used. The scenario does not exercise credential-store persistence
 or native system media keys. It is a local interactive-desktop check, not a

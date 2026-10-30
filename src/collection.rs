@@ -1,6 +1,7 @@
 //! Resolve a play action without changing the browser's current page.
 use crate::{
-    api::{Album, Artist, Navidrome, Song},
+    api::Navidrome,
+    models::{Album, Artist, Song},
     requests::Cancellation,
 };
 use anyhow::Result;
@@ -38,60 +39,27 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_http::{Response, Server};
     use serde_json::{Value, json};
-    use std::{
-        io::{BufRead, BufReader, Write},
-        net::TcpListener,
-        thread,
-    };
 
     fn fixture(
         responses: Vec<(&'static str, &'static str, Value)>,
         cancel_after: Option<Cancellation>,
-    ) -> (Navidrome, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = Navidrome::new(
-            &format!("http://{}", listener.local_addr().unwrap()),
-            "fixture",
-            "fixture",
-        )
-        .unwrap();
-        let server = thread::spawn(move || {
-            let last = responses.len() - 1;
-            for (index, (method, id, body)) in responses.into_iter().enumerate() {
-                let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(socket.try_clone().unwrap());
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                let url = reqwest::Url::parse(&format!(
-                    "http://localhost{}",
-                    line.split_whitespace().nth(1).unwrap()
-                ))
-                .unwrap();
-                assert_eq!(url.path(), format!("/rest/{method}.view"));
-                assert_eq!(
-                    url.query_pairs().find(|(key, _)| key == "id").unwrap().1,
-                    id
-                );
-                loop {
-                    let mut header = String::new();
-                    reader.read_line(&mut header).unwrap();
-                    if header.trim().is_empty() {
-                        break;
-                    }
-                }
+    ) -> (Navidrome, Server) {
+        let last = responses.len() - 1;
+        let server = Server::new(responses.into_iter().enumerate().map(
+            |(index, (method, id, body))| {
+                let response = Response::subsonic(method, body).query("id", id);
                 if index == last
-                    && let Some(cancellation) = &cancel_after
+                    && let Some(cancellation) = cancel_after.clone()
                 {
-                    cancellation.cancel();
+                    response.before_reply(move || cancellation.cancel())
+                } else {
+                    response
                 }
-                let payload = json!({"subsonic-response": body}).to_string();
-                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", payload.len(), payload).unwrap();
-            }
-        });
+            },
+        ));
+        let client = Navidrome::new(&server.url, "fixture", "fixture").unwrap();
         (client, server)
     }
 
@@ -137,7 +105,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["disc1", "disc2", "new-song"]
         );
-        server.join().unwrap();
+        server.finish();
     }
 
     #[test]
@@ -168,6 +136,6 @@ mod tests {
             album_count: 2,
         });
         assert!(collection.songs(&client, &cancellation).is_err());
-        server.join().unwrap();
+        server.finish();
     }
 }

@@ -4,7 +4,7 @@ impl PlayerView {
     pub(super) fn player_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let current = self.transport.queue().current();
         let enabled = current.is_some();
-        let duration = current.map_or(0, |song| song.duration);
+        let duration = self.transport.duration();
         let position = self
             .seek_slider
             .read(cx)
@@ -50,7 +50,7 @@ impl PlayerView {
                             .min_w_0()
                             .child(artwork(
                                 self.connection.read(cx).client.as_ref(),
-                                current.and_then(|song| song.cover_art.as_deref()),
+                                current.and_then(Song::artwork_id),
                                 40.,
                             ))
                             .child(
@@ -95,68 +95,56 @@ impl PlayerView {
                             .items_center()
                             .gap_2()
                             .child(
-                                div()
-                                    .id("shuffle")
-                                    .size(px(30.))
-                                    .rounded_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .when(self.transport.queue().is_shuffled(), |view| {
-                                        view.bg(rgb(SELECTED))
-                                    })
-                                    .hover(|view| view.bg(rgb(HOVER)))
-                                    .child(icon(
+                                icon_button(
+                                    "shuffle",
+                                    icon(
                                         "shuffle",
                                         if self.transport.queue().is_shuffled() {
                                             ACCENT
                                         } else {
                                             MUTED
                                         },
-                                    ))
-                                    .tooltip({
-                                        let shuffled = self.transport.queue().is_shuffled();
-                                        move |_, cx| {
-                                            cx.new(|_| {
-                                                Hint::new(if shuffled {
-                                                    "Turn shuffle off · s"
-                                                } else {
-                                                    "Turn shuffle on · s"
-                                                })
-                                            })
-                                            .into()
-                                        }
-                                    })
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.toggle_shuffle(cx)),
                                     ),
+                                )
+                                .size(px(30.))
+                                .rounded_full()
+                                .when(self.transport.queue().is_shuffled(), |view| {
+                                    view.bg(rgb(SELECTED))
+                                })
+                                .tooltip({
+                                    let shuffled = self.transport.queue().is_shuffled();
+                                    move |_, cx| {
+                                        cx.new(|_| {
+                                            Hint::new(if shuffled {
+                                                shortcuts::SHUFFLE.hint("Turn shuffle off")
+                                            } else {
+                                                shortcuts::SHUFFLE.hint("Turn shuffle on")
+                                            })
+                                        })
+                                        .into()
+                                    }
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_shuffle(cx))),
                             )
                             .child(
-                                div()
-                                    .id("previous")
-                                    .size(px(32.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .child(icon("previous", if enabled { TEXT } else { MUTED }))
-                                    .tooltip(|_, cx| {
-                                        cx.new(|_| Hint::new("Previous song or restart · [")).into()
+                                icon_button(
+                                    "previous",
+                                    icon("previous", if enabled { TEXT } else { MUTED }),
+                                )
+                                .tooltip(|_, cx| {
+                                    cx.new(|_| {
+                                        Hint::new(
+                                            shortcuts::PREVIOUS.hint(shortcuts::PREVIOUS.label),
+                                        )
                                     })
-                                    .on_click(cx.listener(|this, _, _, cx| this.previous(cx))),
+                                    .into()
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.previous(cx))),
                             )
                             .child(
-                                div()
-                                    .id("toggle")
-                                    .size(px(38.))
-                                    .rounded_full()
-                                    .bg(rgb(if enabled { ACCENT } else { BORDER }))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .child(icon_sized(
+                                icon_button(
+                                    "toggle",
+                                    icon_sized(
                                         if self.transport.state().is_playing() {
                                             "pause"
                                         } else {
@@ -164,35 +152,40 @@ impl PlayerView {
                                         },
                                         if enabled { ON_ACCENT } else { MUTED },
                                         20.,
-                                    ))
-                                    .tooltip({
-                                        let playing = self.transport.state().is_playing();
-                                        move |_, cx| {
-                                            cx.new(|_| {
-                                                Hint::new(if !enabled {
-                                                    "Choose a song to play"
-                                                } else if playing {
-                                                    "Pause · Space"
-                                                } else {
-                                                    "Play · Space"
-                                                })
+                                    ),
+                                )
+                                .size(px(38.))
+                                .rounded_full()
+                                .bg(rgb(if enabled { ACCENT } else { BORDER }))
+                                .tooltip({
+                                    let playing = self.transport.state().is_playing();
+                                    move |_, cx| {
+                                        cx.new(|_| {
+                                            Hint::new(if !enabled {
+                                                "Choose a song to play".to_owned()
+                                            } else if playing {
+                                                shortcuts::TOGGLE.hint("Pause")
+                                            } else {
+                                                shortcuts::TOGGLE.hint("Play")
                                             })
-                                            .into()
-                                        }
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle(cx))),
+                                        })
+                                        .into()
+                                    }
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle(cx))),
                             )
                             .child(
-                                div()
-                                    .id("next")
-                                    .size(px(32.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .child(icon("next", if enabled { TEXT } else { MUTED }))
-                                    .tooltip(|_, cx| cx.new(|_| Hint::new("Next song · ]")).into())
-                                    .on_click(cx.listener(|this, _, _, cx| this.next(cx))),
+                                icon_button(
+                                    "next",
+                                    icon("next", if enabled { TEXT } else { MUTED }),
+                                )
+                                .tooltip(|_, cx| {
+                                    cx.new(|_| {
+                                        Hint::new(shortcuts::NEXT.hint(shortcuts::NEXT.label))
+                                    })
+                                    .into()
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.next(cx))),
                             ),
                     )
                     .child(
@@ -202,33 +195,27 @@ impl PlayerView {
                             .items_center()
                             .gap_2()
                             .child(
-                                div()
-                                    .id("mute")
-                                    .size(px(30.))
-                                    .rounded_full()
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .hover(|view| view.bg(rgb(HOVER)))
-                                    .child(icon(
+                                icon_button(
+                                    "mute",
+                                    icon(
                                         if self.settings.value().volume == 0. {
                                             "volume-muted"
                                         } else {
                                             "volume"
                                         },
                                         MUTED,
-                                    ))
-                                    .tooltip({
-                                        let muted = self.settings.value().volume == 0.;
-                                        move |_, cx| {
-                                            cx.new(|_| {
-                                                Hint::new(if muted { "Unmute" } else { "Mute" })
-                                            })
+                                    ),
+                                )
+                                .size(px(30.))
+                                .rounded_full()
+                                .tooltip({
+                                    let muted = self.settings.value().volume == 0.;
+                                    move |_, cx| {
+                                        cx.new(|_| Hint::new(if muted { "Unmute" } else { "Mute" }))
                                             .into()
-                                        }
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
+                                    }
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
                             )
                             .child(div().w(px(76.)).child(self.volume_slider.clone()))
                             .child(div().w(px(36.)).text_xs().text_color(rgb(MUTED)).child(
@@ -260,7 +247,11 @@ impl PlayerView {
                             .text_xs()
                             .text_right()
                             .text_color(rgb(MUTED))
-                            .child(time_label(duration)),
+                            .child(if duration > 0 {
+                                time_label(duration)
+                            } else {
+                                "--:--".into()
+                            }),
                     ),
             )
             .into_any_element()

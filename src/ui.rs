@@ -1,8 +1,9 @@
 use crate::{
-    api::{Album, Artist, Navidrome, Song, time_label},
+    api::Navidrome,
     artwork::{app_icon, artwork},
     browser::{Browser, BrowserEntry, LibraryData, LibraryRequest, Page},
     collection::Collection,
+    collection_controller::{CollectionController, CollectionEvent},
     connection::{Activity, ConnectionController, ConnectionEvent},
     credentials::Connection,
     failure::{Failure, Failures, Operation, RetryAction},
@@ -14,14 +15,20 @@ use crate::{
         SIDEBAR_COMPACT_WIDTH, SIDEBAR_EXPANDED_WIDTH, SONG_ROW_HEIGHT, page_items,
     },
     library_loader::{LibraryLoader, LoadContext, LoadOutcome},
-    likes::Likes,
+    likes_controller::{LikesController, LikesEvent},
+    models::{Album, Artist, Song, time_label},
+    navigation::Section,
     playback_controller::PlaybackController,
-    requests::Requests,
-    settings::{SavedFolder, Section, Settings},
+    settings::{SavedFolder, Settings},
+    shortcuts,
     slider::{CommitMode, Slider, SliderEvent},
     theme::{
         ACCENT, ACCENT_HOVER, ARTWORK_ICON, BG, BORDER, ERROR_BG, ERROR_TEXT, HOVER,
         KEYBOARD_FOCUS, LIKED, MUTED, ON_ACCENT, PANEL, SELECTED, TEXT,
+    },
+    ui_components::{
+        Hint, button, icon, icon_button, icon_sized, notification, row_play_button, toolbar_icon,
+        track_row, wordmark,
     },
 };
 use gpui::{
@@ -55,118 +62,6 @@ mod status_bar;
 // text_ellipsis() alone can reuse shortened text runs during wrapped layout and
 // split a UTF-8 character on a later measurement.
 
-fn icon_sized(name: &'static str, color: u32, edge: f32) -> gpui::Svg {
-    svg()
-        .path(name)
-        .size(px(edge))
-        .flex_shrink_0()
-        .text_color(rgb(color))
-}
-
-fn icon(name: &'static str, color: u32) -> gpui::Svg {
-    icon_sized(name, color, 20.)
-}
-
-fn wordmark(size: f32) -> gpui::Div {
-    div()
-        .relative()
-        // Optical center of "Still" in the bundled Source Sans 3 Medium.
-        .top(px(size * 0.012))
-        .text_size(px(size))
-        .line_height(px(size))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .child("Still")
-}
-
-fn button(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .px_4()
-        .py_2()
-        .rounded_md()
-        .bg(rgb(HOVER))
-        .text_color(rgb(TEXT))
-        .cursor_pointer()
-        .child(label.into())
-}
-
-fn toolbar_icon(
-    id: &'static str,
-    glyph: &'static str,
-    hint: &'static str,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(32.))
-        .flex_shrink_0()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(|view| view.bg(rgb(HOVER)))
-        .child(icon(glyph, MUTED))
-        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-}
-
-fn row_play_button(id: SharedString, hint: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(28.))
-        .flex_shrink_0()
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(|view| view.bg(rgb(HOVER)))
-        .child(icon_sized("play", MUTED, 16.))
-        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-}
-
-struct Hint(SharedString);
-
-impl Hint {
-    fn new(text: impl Into<SharedString>) -> Self {
-        Self(text.into())
-    }
-}
-
-impl Render for Hint {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(rgb(TEXT))
-            .text_color(rgb(ON_ACCENT))
-            .text_sm()
-            .child(self.0.clone())
-    }
-}
-
-fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .w_full()
-        .h(px(height))
-        .flex()
-        .items_center()
-        .gap_4()
-        .px_3()
-        .border_b_1()
-        .border_color(rgb(BORDER))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(PANEL)))
-}
-
 #[derive(Clone)]
 enum FailureTarget {
     Connection,
@@ -177,8 +72,7 @@ pub struct PlayerView {
     connection: Entity<ConnectionController>,
     browser: Browser,
     library_loader: Entity<LibraryLoader>,
-    collection_requests: Requests,
-    pending_collection: Option<Collection>,
+    collections: Entity<CollectionController>,
     server: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
@@ -196,7 +90,7 @@ pub struct PlayerView {
     seek_slider: Entity<Slider>,
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
-    likes: Likes,
+    likes: Entity<LikesController>,
     failures: Failures,
     transport: PlaybackController,
     settings: Settings,
@@ -241,6 +135,8 @@ impl PlayerView {
         let seek_slider = cx.new(|_| Slider::new("seek", CommitMode::OnRelease));
         let volume_slider = cx.new(|_| Slider::new("volume-slider", CommitMode::Continuous));
         let library_loader = cx.new(|_| LibraryLoader::default());
+        let collections = cx.new(|_| CollectionController::default());
+        let likes = cx.new(|_| LikesController::default());
         let environment_connection = ["NAVIDROME_URL", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"]
             .iter()
             .any(|name| std::env::var_os(name).is_some());
@@ -273,12 +169,28 @@ impl PlayerView {
                 this.accept_library(outcome, cx);
             }
         }));
+        subscriptions.push(cx.subscribe(&collections, |this, controller, event, cx| {
+            if let CollectionEvent::Ready = event
+                && let Some(songs) = controller.update(cx, |controller, _| controller.take_ready())
+            {
+                this.play(songs, 0, cx);
+            }
+            cx.notify();
+        }));
+        subscriptions.push(cx.subscribe(&likes, |this, _, event, cx| {
+            if matches!(event, LikesEvent::Saved)
+                && matches!(this.browser.state().page, Page::Liked)
+            {
+                this.merge_liked(cx);
+            }
+            cx.notify();
+        }));
         subscriptions.push(cx.subscribe(&seek_slider, |this, _, event, cx| {
             if let SliderEvent::Change(ratio) = event
-                && let Some(song) = this.transport.queue().current()
+                && this.transport.queue().current().is_some()
             {
                 this.transport
-                    .seek((song.duration as f32 * ratio).round() as u64);
+                    .seek((this.transport.duration() as f32 * ratio).round() as u64);
             }
             cx.notify();
         }));
@@ -374,8 +286,7 @@ impl PlayerView {
             connection,
             browser: Browser::default(),
             library_loader,
-            collection_requests: Requests::default(),
-            pending_collection: None,
+            collections,
             server,
             username,
             password,
@@ -397,7 +308,7 @@ impl PlayerView {
             } else {
                 0.7
             },
-            likes: Likes::default(),
+            likes,
             failures: Failures::default(),
             transport: PlaybackController::new(initial_volume, initial_shuffle),
             settings,
@@ -447,14 +358,14 @@ impl PlayerView {
         self.remember_folder(cx);
         self.pending_folder = None;
         self.browser.clear();
-        self.cancel_collection();
+        self.cancel_collection(cx);
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
         self.connection
             .update(cx, |connection, cx| connection.disconnect(cx));
         self.demo = false;
         self.failures = Failures::default();
-        self.likes = Likes::default();
+        self.likes.update(cx, |likes, _| likes.reset());
         self.password.update(cx, |field, cx| field.clear(cx));
         window.focus(&self.password.focus_handle(cx));
         cx.notify();
@@ -464,6 +375,7 @@ impl PlayerView {
         let mut failures: Vec<_> = self
             .failures
             .iter()
+            .chain(self.likes.read(cx).failures().iter())
             .map(|(operation, failure)| {
                 (
                     FailureTarget::Operation(operation.clone()),
@@ -472,6 +384,13 @@ impl PlayerView {
                 )
             })
             .collect();
+        if let Some(failure) = self.collections.read(cx).failure() {
+            failures.push((
+                FailureTarget::Operation(Operation::Collection),
+                failure.message.clone(),
+                failure.retry.is_some(),
+            ));
+        }
         if let Some(failure) = self.connection.read(cx).failure() {
             failures.insert(
                 0,
@@ -504,16 +423,7 @@ impl PlayerView {
         };
         #[cfg(feature = "ui-tests")]
         self.ui_probe.borrow_mut().failures.push(id.to_string());
-        div()
-            .flex_shrink_0()
-            .p_3()
-            .rounded_md()
-            .bg(rgb(ERROR_BG))
-            .text_color(rgb(ERROR_TEXT))
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(div().flex_1().min_w_0().whitespace_normal().child(message))
+        notification(message)
             .when(retry, |view| {
                 view.child(
                     button(id, "Retry").on_click(
@@ -598,12 +508,12 @@ impl PlayerView {
         self.reset_navigation_ui(cx);
         if !self.browser.state().loaded {
             if self.demo {
-                self.load_demo_page();
+                self.load_demo_page(cx);
             } else {
                 self.load(self.browser.request(), cx);
             }
         } else if matches!(self.browser.state().page, Page::Liked) {
-            self.merge_liked();
+            self.merge_liked(cx);
         }
         self.remember_folder(cx);
         self.reveal_cursor();
@@ -619,7 +529,7 @@ impl PlayerView {
         let context = LoadContext {
             request_id,
             request,
-            like_revision: self.likes.revision(),
+            like_revision: self.likes.read(cx).state().revision(),
             playback_generation: self.transport.generation(),
         };
         self.library_loader.update(cx, |loader, cx| {
@@ -644,7 +554,10 @@ impl PlayerView {
                 if matches!(self.browser.state().page, Page::Liked)
                     && let LibraryData::Songs(songs) = data
                 {
-                    data = LibraryData::Songs(self.likes.accept_server(songs, like_revision));
+                    data = LibraryData::Songs(
+                        self.likes
+                            .update(cx, |likes, _| likes.accept_server(songs, like_revision)),
+                    );
                 }
                 self.browser.apply(data, request.offset > 0);
                 if let Some(saved) = self.pending_folder.take() {
@@ -687,36 +600,48 @@ impl PlayerView {
     }
 
     fn retry(&mut self, target: FailureTarget, cx: &mut Context<Self>) {
-        let FailureTarget::Operation(operation) = target else {
-            self.connection
-                .update(cx, |connection, cx| connection.retry(cx));
-            return;
-        };
-        if operation == Operation::Library && self.browser.is_loading() {
-            return;
-        }
-        let Some(action) = self
-            .failures
-            .take(&operation)
-            .and_then(|failure| failure.retry)
-        else {
-            return;
-        };
-        match action {
-            RetryAction::Library(request) => self.load(request, cx),
-            RetryAction::Collection(collection) => self.play_collection(collection, cx),
-            RetryAction::Playback(generation) => {
-                if self.transport.generation() == generation {
-                    self.play_current(cx);
+        match target {
+            FailureTarget::Connection => {
+                self.connection
+                    .update(cx, |connection, cx| connection.retry(cx));
+            }
+            FailureTarget::Operation(Operation::Collection) => {
+                if let Some(client) = self.connection.read(cx).client.clone() {
+                    self.collections
+                        .update(cx, |collections, cx| collections.retry(client, cx));
                 }
             }
-            RetryAction::Like { song, liked } => self.set_like(song, liked, cx),
+            FailureTarget::Operation(Operation::Like(id)) => {
+                let client = self.connection.read(cx).client.clone();
+                if self.demo || client.is_some() {
+                    self.likes
+                        .update(cx, |likes, cx| likes.retry(client, &id, cx));
+                }
+            }
+            FailureTarget::Operation(operation) => {
+                if operation == Operation::Library && self.browser.is_loading() {
+                    return;
+                }
+                let action = self
+                    .failures
+                    .take(&operation)
+                    .and_then(|failure| failure.retry);
+                match action {
+                    Some(RetryAction::Library(request)) => self.load(request, cx),
+                    Some(RetryAction::Playback(generation))
+                        if self.transport.generation() == generation =>
+                    {
+                        self.play_current(cx)
+                    }
+                    _ => {}
+                }
+            }
         }
         cx.notify();
     }
 
     fn play(&mut self, queue: Arc<Vec<Song>>, index: usize, cx: &mut Context<Self>) {
-        self.cancel_collection();
+        self.cancel_collection(cx);
         if self.demo {
             self.failures.set(
                 Operation::Playback,
@@ -739,7 +664,7 @@ impl PlayerView {
         }
     }
     fn playback_changed(&mut self, cx: &mut Context<Self>) {
-        self.cancel_collection();
+        self.cancel_collection(cx);
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
         self.failures.clear(&Operation::Playback);
         self.follow_current_track();
@@ -800,10 +725,9 @@ impl PlayerView {
         }
     }
 
-    fn cancel_collection(&mut self) {
-        self.collection_requests.invalidate();
-        self.pending_collection = None;
-        self.failures.clear(&Operation::Collection);
+    fn cancel_collection(&mut self, cx: &mut Context<Self>) {
+        self.collections
+            .update(cx, |collections, _| collections.cancel());
     }
 
     fn play_collection(&mut self, collection: Collection, cx: &mut Context<Self>) {
@@ -811,48 +735,11 @@ impl PlayerView {
             self.play(Arc::default(), 0, cx);
             return;
         }
-        let Some(client) = self.connection.read(cx).client.clone() else {
-            return;
-        };
-        let (request_id, cancellation) = self.collection_requests.start();
-        let session_id = self.connection.read(cx).session_id;
-        let generation = self.transport.generation();
-        self.pending_collection = Some(collection.clone());
-        self.failures.clear(&Operation::Collection);
-        let worker_collection = collection.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { worker_collection.songs(&client, &cancellation) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.collection_requests.is_current(request_id)
-                    || this.connection.read(cx).session_id != session_id
-                {
-                    return;
-                }
-                this.pending_collection = None;
-                if this.transport.generation() == generation {
-                    match result {
-                        Ok(songs) if !songs.is_empty() => this.play(Arc::new(songs), 0, cx),
-                        Ok(_) => this.failures.set(
-                            Operation::Collection,
-                            format!("No songs in {}", collection.name()).into(),
-                        ),
-                        Err(error) => this.failures.set(
-                            Operation::Collection,
-                            Failure::new(
-                                format!("Could not play {}: {error:#}", collection.name()),
-                                RetryAction::Collection(collection),
-                            ),
-                        ),
-                    }
-                }
-                cx.notify();
+        if let Some(client) = self.connection.read(cx).client.clone() {
+            self.collections.update(cx, |collections, cx| {
+                collections.play(client, collection, cx)
             });
-        })
-        .detach();
-        cx.notify();
+        }
     }
 
     fn play_folder(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -865,78 +752,18 @@ impl PlayerView {
     }
 
     fn toggle_like(&mut self, song: Song, cx: &mut Context<Self>) {
-        if !self.demo && self.connection.read(cx).client.is_none() {
-            return;
-        }
-        if let Some(liked) = self.likes.begin(&song) {
-            self.send_like(song, liked, cx);
-        }
-    }
-
-    fn set_like(&mut self, song: Song, liked: bool, cx: &mut Context<Self>) {
-        if !self.demo && self.connection.read(cx).client.is_none() {
-            return;
-        }
-        let Some(liked) = self.likes.begin_set(&song, liked) else {
-            return;
-        };
-        self.send_like(song, liked, cx);
-    }
-
-    fn send_like(&mut self, song: Song, liked: bool, cx: &mut Context<Self>) {
-        self.failures.clear(&Operation::Like(song.id.clone()));
-        if self.demo {
-            self.finish_like(&song, true);
-            cx.notify();
-            return;
-        }
-        let client = self
-            .connection
-            .read(cx)
-            .client
-            .clone()
-            .expect("connected client");
-        let session_id = self.connection.read(cx).session_id;
-        let id = song.id.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { client.set_liked(&id, liked) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.connection.read(cx).session_id != session_id {
-                    return;
-                }
-                this.finish_like(&song, result.is_ok());
-                if let Err(error) = result {
-                    this.failures.set(
-                        Operation::Like(song.id.clone()),
-                        Failure::new(
-                            format!("Could not save the like for “{}”: {error:#}", song.title),
-                            RetryAction::Like { song, liked },
-                        ),
-                    );
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn finish_like(&mut self, song: &Song, success: bool) {
-        self.likes.finish(song, success);
-        if success {
-            self.failures.clear(&Operation::Like(song.id.clone()));
-        }
-        if success && matches!(self.browser.state().page, Page::Liked) {
-            self.merge_liked();
+        let client = self.connection.read(cx).client.clone();
+        if self.demo || client.is_some() {
+            self.likes
+                .update(cx, |likes, cx| likes.toggle(client, song, cx));
         }
     }
 
-    fn merge_liked(&mut self) {
+    fn merge_liked(&mut self, cx: &gpui::App) {
         let songs = self
             .likes
+            .read(cx)
+            .state()
             .merge_liked(self.browser.state().songs.as_ref().clone());
         self.browser.replace_songs(songs);
     }
@@ -947,8 +774,8 @@ impl PlayerView {
         slot: &'static str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let liked = self.likes.is_liked(song);
-        let pending = self.likes.is_pending(&song.id);
+        let liked = self.likes.read(cx).state().is_liked(song);
+        let pending = self.likes.read(cx).state().is_pending(&song.id);
         let song = song.clone();
         let label = if pending {
             "Saving…"
@@ -1004,6 +831,8 @@ impl PlayerView {
             .transport
             .poll(self.connection.read(cx).client.as_ref());
         if update.track_changed {
+            self.collections
+                .update(cx, |collections, _| collections.cancel_pending());
             self.failures.clear(&Operation::Playback);
             self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
             self.follow_current_track();
@@ -1055,15 +884,14 @@ impl PlayerView {
 
     fn title(&self) -> String {
         match &self.browser.state().page {
-            Page::Artists => "Artists".into(),
-            Page::Albums => "Albums".into(),
-            Page::Songs => "Songs".into(),
-            Page::Liked => "Liked songs".into(),
+            Page::Artists | Page::Albums | Page::Songs | Page::Liked => {
+                self.browser.state().page.section().info().label.into()
+            }
             Page::Artist(artist) => artist.name.clone(),
             Page::Album(album) => album.name.clone(),
             Page::Folder(path) => {
                 if path.is_empty() {
-                    "Folders".into()
+                    Section::Folders.info().label.into()
                 } else {
                     file_name(path).into()
                 }
@@ -1212,6 +1040,9 @@ impl PlayerView {
                     self.browser.set_query(String::new());
                 } else {
                     self.failures = Failures::default();
+                    self.collections
+                        .update(cx, |collections, _| collections.dismiss_failure());
+                    self.likes.update(cx, |likes, _| likes.dismiss_failures());
                     self.connection
                         .update(cx, |connection, _| connection.dismiss_failure());
                 }
@@ -1244,7 +1075,9 @@ impl PlayerView {
             Volume(delta) => self.adjust_volume(delta, cx),
             Section(index) => self.switch_section(index, cx),
             Cycle(delta) => self.switch_section(
-                (self.section_index() as i32 + delta).rem_euclid(5) as usize,
+                (self.section_index() as i32 + delta)
+                    .rem_euclid(crate::navigation::Section::ALL.len() as i32)
+                    as usize,
                 cx,
             ),
             Help => self.show_help = !self.show_help,
@@ -1271,7 +1104,7 @@ impl PlayerView {
         cx.notify();
     }
 
-    fn load_demo_page(&mut self) {
+    fn load_demo_page(&mut self, cx: &gpui::App) {
         self.browser.invalidate_requests();
         let mut data = match self.browser.state().page.clone() {
             Page::Artists => LibraryData::Artists(demo_artists()),
@@ -1289,7 +1122,7 @@ impl PlayerView {
                     .collect(),
             ),
             Page::Liked => LibraryData::Songs(
-                self.likes.merge_liked(
+                self.likes.read(cx).state().merge_liked(
                     demo_albums()
                         .into_iter()
                         .flat_map(|album| album.song)
@@ -1323,7 +1156,7 @@ impl PlayerView {
             }
         };
         if let LibraryData::Albums(albums) = &mut data {
-            crate::api::sort_albums(albums);
+            crate::models::sort_albums(albums);
         }
         self.browser.apply(data, false);
     }
@@ -1395,7 +1228,6 @@ impl Render for PlayerView {
             .flex()
             .flex_col()
             .child(self.header(window, cx))
-            .children(self.failure_banners(cx))
             .child(
                 div()
                     .flex_1()
@@ -1409,6 +1241,7 @@ impl Render for PlayerView {
                     )
                     .child(content),
             )
+            .children(self.failure_banners(cx))
             .child(self.status_bar(cx));
         root = root
             .child(

@@ -161,6 +161,9 @@ struct Expected {
     // Audio position only, including platforms without native Now Playing.
     audio_position_min: Option<u64>,
     audio_position_max: Option<u64>,
+    duration: Option<u64>,
+    seek_enabled: Option<bool>,
+    seek_progress_min: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -190,6 +193,9 @@ struct Snapshot {
     media_state: String,
     media_position: u64,
     position: u64,
+    duration: u64,
+    seek_enabled: bool,
+    seek_progress: f32,
 }
 
 impl Snapshot {
@@ -226,7 +232,11 @@ impl Snapshot {
         });
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
+        let (seek_progress, seek_enabled) = view.seek_slider.read(cx).test_state();
         Self {
+            duration: view.transport.duration(),
+            seek_progress,
+            seek_enabled,
             connection_scroll_max: f32::from(view.connection_scroll.max_offset().height),
             connection_scroll_y: f32::from(view.connection_scroll.offset().y),
             playback: match view.transport.state().status {
@@ -359,6 +369,11 @@ impl Snapshot {
                 .is_none_or(|fits| fits == self.rendered.footer_fits)
             && field!(focus)
             && field!(playback)
+            && field!(duration)
+            && field!(seek_enabled)
+            && expected
+                .seek_progress_min
+                .is_none_or(|min| self.seek_progress >= min)
             && field!(media_title)
             && field!(media_state)
             && expected
@@ -497,6 +512,9 @@ impl Run {
                 .update(cx, |connection, _| connection.test_store_available()),
             Step::Retry { operation } => {
                 let target = match operation.as_str() {
+                    operation if operation.starts_with("like:") => {
+                        FailureTarget::Operation(Operation::Like(operation[5..].to_owned()))
+                    }
                     "connection" => FailureTarget::Connection,
                     "library" => FailureTarget::Operation(Operation::Library),
                     "collection" => FailureTarget::Operation(Operation::Collection),

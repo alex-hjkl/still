@@ -53,13 +53,15 @@ impl PlayerView {
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .child("Keyboard shortcuts"),
                             )
-                            .child(button("close-help", "Close · Esc").on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.show_help = false;
-                                    window.focus(&this.library_focus);
-                                    cx.notify();
-                                },
-                            ))),
+                            .child(
+                                button("close-help", shortcuts::ESCAPE.hint("Close")).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.show_help = false;
+                                        window.focus(&this.library_focus);
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
                     )
                     .child(self.keyboard_help(width - 32.)),
             )
@@ -68,40 +70,7 @@ impl PlayerView {
 
     fn keyboard_help(&self, width: f32) -> gpui::AnyElement {
         let column_width = width - 8.;
-        let groups = [
-            (
-                "Navigation & browsing",
-                vec![
-                    ("j / k", "Next / previous item"),
-                    ("h / l", "Back / open or play"),
-                    ("Enter", "Open or play selected item"),
-                    ("Shift+Enter", "Play selected folder, artist or album"),
-                    ("Backspace", "Go back"),
-                    ("gg / G", "First / last item"),
-                    ("Ctrl+D / U", "Half a page down / up"),
-                    ("Ctrl+F / B", "Page down / up"),
-                    ("/ · ⌘F", "Find in loaded list"),
-                    ("Enter / Esc", "Return to list; Esc again clears"),
-                ],
-            ),
-            (
-                "Playback & app",
-                vec![
-                    ("Space", "Play / pause"),
-                    ("s", "Toggle shuffle"),
-                    ("[ / ]", "Previous / next song"),
-                    ("← / → · H / L", "Seek back / forward 10s"),
-                    ("− / +", "Volume down / up 5%"),
-                    ("f / F", "Toggle like: selected / playing"),
-                    ("⌘1–⌘5", "Switch sections; hold ⌘ for hints"),
-                    ("Tab / Shift+Tab", "Next / previous section"),
-                    ("r / e", "Refresh / load more"),
-                    ("? · F1 · Esc", "Open / close keyboard help"),
-                    ("⌘B", "Expand / collapse sidebar"),
-                    ("⌘Q", "Quit Still"),
-                ],
-            ),
-        ];
+        let groups = shortcuts::help_groups();
         div()
             .id("keyboard-help")
             .flex_1()

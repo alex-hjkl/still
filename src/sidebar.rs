@@ -74,18 +74,10 @@ impl PlayerView {
     ) -> gpui::Stateful<gpui::Div> {
         let compact = self.settings.value().sidebar_compact;
         let hints = window.is_window_active() && section_hints(window.modifiers());
-        div()
-            .id("toggle-sidebar")
-            .size(px(32.))
-            .flex_shrink_0()
-            .rounded_md()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|view| view.bg(rgb(HOVER)))
-            .child(if hints {
-                self.shortcut_badge("toggle-sidebar", "⌘B")
+        icon_button(
+            "toggle-sidebar",
+            if hints {
+                self.shortcut_badge("toggle-sidebar", shortcuts::SIDEBAR.keys)
                     .into_any_element()
             } else {
                 icon(
@@ -97,18 +89,19 @@ impl PlayerView {
                     MUTED,
                 )
                 .into_any_element()
-            })
-            .tooltip(move |_, cx| {
-                cx.new(|_| {
-                    Hint::new(if compact {
-                        "Expand sidebar · ⌘B"
-                    } else {
-                        "Collapse sidebar · ⌘B"
-                    })
+            },
+        )
+        .tooltip(move |_, cx| {
+            cx.new(|_| {
+                Hint::new(if compact {
+                    shortcuts::SIDEBAR.hint("Expand sidebar")
+                } else {
+                    shortcuts::SIDEBAR.hint("Collapse sidebar")
                 })
-                .into()
             })
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
+            .into()
+        })
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
     }
 
     pub(super) fn sidebar_width(&self) -> f32 {
@@ -175,55 +168,43 @@ impl PlayerView {
                     .child(self.sidebar_icon_slot("brand", app_icon(32.)))
                     .when(!compact, |view| view.child(wordmark(23.))),
             )
-            .children(
-                [
-                    ("artists", "Artists", "Artists · ⌘1", Page::Artists),
-                    ("albums", "Albums", "Albums · ⌘2", Page::Albums),
-                    ("songs", "Songs", "Songs · ⌘3", Page::Songs),
-                    (
-                        "folders",
-                        "Folders",
-                        "Folders · ⌘4",
-                        Page::Folder(String::new()),
-                    ),
-                    ("heart", "Liked songs", "Liked songs · ⌘5", Page::Liked),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (glyph, label, hint, page))| {
-                    div()
-                        .id(index)
-                        .w(px(item_width))
-                        .h(px(40.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_color(rgb(if selected == index { ACCENT } else { MUTED }))
-                        .when(selected == index, |view| view.bg(rgb(SELECTED)))
-                        .hover(|view| view.bg(rgb(HOVER)))
-                        .child(self.sidebar_icon_slot(
-                            glyph,
-                            if hints {
-                                self.shortcut_badge(glyph, format!("⌘{}", index + 1))
-                                    .into_any_element()
-                            } else {
-                                icon(glyph, if selected == index { ACCENT } else { MUTED })
-                                    .into_any_element()
-                            },
-                        ))
-                        .when(!compact, |view| {
-                            view.child(div().flex_1().min_w_0().truncate().child(label))
-                        })
-                        .tooltip(move |_, cx| cx.new(|_| Hint::new(hint)).into())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.browser.clear_history();
-                            this.open_section(page.section(), cx);
-                        }))
-                }),
-            )
+            .children(Section::ALL.into_iter().map(|info| {
+                let section = info.section;
+                let index = section.index();
+                let glyph = info.icon;
+                let label = info.label;
+                let hint = format!("{label} · {}", info.shortcut);
+                div()
+                    .id(index)
+                    .w(px(item_width))
+                    .h(px(40.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(rgb(if selected == index { ACCENT } else { MUTED }))
+                    .when(selected == index, |view| view.bg(rgb(SELECTED)))
+                    .hover(|view| view.bg(rgb(HOVER)))
+                    .child(self.sidebar_icon_slot(
+                        glyph,
+                        if hints {
+                            self.shortcut_badge(glyph, info.shortcut).into_any_element()
+                        } else {
+                            icon(glyph, if selected == index { ACCENT } else { MUTED })
+                                .into_any_element()
+                        },
+                    ))
+                    .when(!compact, |view| {
+                        view.child(div().flex_1().min_w_0().truncate().child(label))
+                    })
+                    .tooltip(move |_, cx| cx.new(|_| Hint::new(hint.clone())).into())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.browser.clear_history();
+                        this.open_section(section, cx);
+                    }))
+            }))
             .child(div().flex_1())
             .child(
                 div()
@@ -274,7 +255,10 @@ impl PlayerView {
                     .when(!compact, |view| {
                         view.child(div().text_sm().child("Keyboard shortcuts"))
                     })
-                    .tooltip(|_, cx| cx.new(|_| Hint::new("Keyboard shortcuts · ?")).into())
+                    .tooltip(|_, cx| {
+                        cx.new(|_| Hint::new(shortcuts::HELP.hint("Keyboard shortcuts")))
+                            .into()
+                    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_help = !this.show_help;
                         window.focus(&this.library_focus);

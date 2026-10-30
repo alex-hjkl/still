@@ -1,4 +1,4 @@
-use crate::api::Song;
+use crate::models::Song;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]

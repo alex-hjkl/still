@@ -1,4 +1,4 @@
-use crate::{api::Song, browser::LibraryRequest, collection::Collection, diagnostics};
+use crate::{browser::LibraryRequest, collection::Collection, diagnostics, models::Song};
 
 #[derive(Clone)]
 pub enum RetryAction {

@@ -2,6 +2,7 @@ mod api;
 mod artwork;
 mod browser;
 mod collection;
+mod collection_controller;
 mod connection;
 mod credentials;
 mod diagnostics;
@@ -13,15 +14,22 @@ mod keyboard;
 mod layout;
 mod library_loader;
 mod likes;
+mod likes_controller;
 mod media;
+mod models;
+mod navigation;
 mod playback_controller;
 mod player;
 mod queue;
 mod requests;
 mod settings;
+mod shortcuts;
 mod slider;
+#[cfg(test)]
+mod test_http;
 mod theme;
 mod ui;
+mod ui_components;
 
 use gpui::{
     App, AppContext, Application, Bounds, KeyBinding, Menu, MenuItem, WindowBounds, WindowOptions,
@@ -56,7 +64,7 @@ fn main() {
                 diagnostics::event("Quit requested");
                 cx.quit();
             });
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            cx.bind_keys([KeyBinding::new(shortcuts::QUIT_BINDING, Quit, None)]);
             cx.set_menus(vec![Menu {
                 name: "Still".into(),
                 items: vec![MenuItem::action("Quit Still", Quit)],

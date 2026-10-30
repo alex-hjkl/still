@@ -1,6 +1,6 @@
 //! A reusable slider. Pointer state belongs to the control, not the application view.
 use crate::{
-    api::time_label,
+    models::time_label,
     theme::{ACCENT, BORDER, ON_ACCENT, TEXT},
 };
 use gpui::{
@@ -80,6 +80,10 @@ impl Slider {
     }
     pub fn preview(&self) -> Option<f32> {
         self.pointer.drag
+    }
+    #[cfg(feature = "ui-tests")]
+    pub fn test_state(&self) -> (f32, bool) {
+        (self.value, self.enabled)
     }
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         if self.pointer.drag.is_some() || self.pointer.hover.is_some() {

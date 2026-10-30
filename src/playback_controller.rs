@@ -1,8 +1,9 @@
 //! Playback policy and native media integration, independent of GPUI views.
 use crate::{
-    api::{Navidrome, Song},
+    api::Navidrome,
     failure::{Failure, RetryAction},
     media::{MediaCommand, SystemMedia, seek_position},
+    models::Song,
     player::{Playback, PlaybackStatus, Player},
     queue::PlayQueue,
 };
@@ -40,6 +41,11 @@ impl PlaybackController {
     }
     pub fn state(&self) -> &Playback {
         &self.state
+    }
+    pub fn duration(&self) -> u64 {
+        self.queue
+            .current()
+            .map_or(0, |song| self.state.duration_or(song.duration))
     }
     pub fn generation(&self) -> u64 {
         self.generation
@@ -106,16 +112,16 @@ impl PlaybackController {
         self.player.volume(self.volume);
     }
     pub fn seek(&self, seconds: u64) {
-        if let Some(song) = self.queue.current() {
-            self.player.seek(seconds, song.duration);
+        if self.queue.current().is_some() {
+            self.player.seek(seconds, self.duration());
         }
     }
     pub fn seek_relative(&self, delta: i64) {
         self.skip(delta as f64);
     }
     fn skip(&self, seconds: f64) {
-        if let Some(song) = self.queue.current() {
-            self.player.seek_relative(seconds, song.duration);
+        if self.queue.current().is_some() {
+            self.player.seek_relative(seconds, self.duration());
         }
     }
     fn stop(&mut self) {
@@ -140,10 +146,10 @@ impl PlaybackController {
     }
 
     fn command(&mut self, command: MediaCommand, client: &Navidrome) {
-        let Some(song) = self.queue.current() else {
+        if self.queue.current().is_none() {
             return;
-        };
-        let duration = song.duration;
+        }
+        let duration = self.duration();
         crate::diagnostics::event(&format!("System media command: {command:?}"));
         match command {
             MediaCommand::Play => {
@@ -204,6 +210,7 @@ impl PlaybackController {
         }
         let finished = snapshot.is_finished() && !self.state.is_finished();
         update.changed |= self.state.position.as_secs() != snapshot.position.as_secs()
+            || self.state.duration != snapshot.duration
             || self.state.status != snapshot.status
             || self.state.warning != snapshot.warning;
         self.state = snapshot;
