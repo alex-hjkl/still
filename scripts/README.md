@@ -79,6 +79,11 @@ It switches between light, dark and system appearance and selects a theme with
 the keyboard in the appearance menu.
 It also exercises artist and album queues, failed collection/like writes and
 their retries, and adding/removing a song in Liked songs.
+Player shortcuts are exercised from another section and with help open, including
+liking the current song while another song is selected. With an empty queue,
+`f` uses the selection, while help prevents Space and `f` acting on the covered list.
+Help scrolling with `j` / `k` and arrows is checked in a narrow window, including
+both scroll limits and preserving the library selection.
 It verifies audio position advancement and seek results, with no dependency
 on the macOS Now Playing bridge. The first track reports zero server duration;
 the check verifies that its decoded duration enables the slider and that progress

@@ -155,6 +155,8 @@ struct Expected {
     loaded: Option<bool>,
     library_loading: Option<bool>,
     show_help: Option<bool>,
+    help_scroll_y: Option<f32>,
+    help_scrolled_to_bottom: Option<bool>,
     search_summary: Option<String>,
     volume: Option<f32>,
     volume_slider: Option<f32>,
@@ -175,6 +177,9 @@ struct Expected {
     footer_hints: Option<Vec<String>>,
     footer_fits: Option<bool>,
     current_track: Option<String>,
+    current_liked: Option<bool>,
+    current_like_pending: Option<bool>,
+    selected_liked: Option<bool>,
     queue_len: Option<usize>,
     queue_last: Option<String>,
     focus: Option<String>,
@@ -205,6 +210,8 @@ struct Snapshot {
     loaded: bool,
     library_loading: bool,
     show_help: bool,
+    help_scroll_y: f32,
+    help_scroll_max: f32,
     volume: f32,
     volume_slider: f32,
     shuffle: bool,
@@ -219,6 +226,9 @@ struct Snapshot {
     visible: bool,
     sidebar_width: f32,
     current_track: String,
+    current_liked: bool,
+    current_like_pending: bool,
+    selected_liked: bool,
     queue_len: usize,
     queue_last: String,
     focus: String,
@@ -271,7 +281,18 @@ impl Snapshot {
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         let (seek_progress, seek_enabled) = view.seek_slider.read(cx).test_state();
         let (volume_slider, _) = view.volume_slider.read(cx).test_state();
+        let likes = view.likes.read(cx).state();
+        let current = view.transport.queue().current();
+        let selected_song = view
+            .library
+            .browser()
+            .entries()
+            .get(state.cursor)
+            .and_then(|entry| view.library.browser().entry_song(entry));
         Self {
+            current_liked: current.is_some_and(|song| likes.is_liked(song)),
+            current_like_pending: current.is_some_and(|song| likes.is_pending(&song.id)),
+            selected_liked: selected_song.is_some_and(|song| likes.is_liked(song)),
             volume_slider,
             duration: view.transport.duration(),
             seek_progress,
@@ -302,6 +323,8 @@ impl Snapshot {
             loaded: state.loaded() && !view.library.is_loading(cx),
             library_loading: view.library.is_loading(cx),
             show_help: view.show_help,
+            help_scroll_y: f32::from(view.help_scroll.offset().y),
+            help_scroll_max: f32::from(view.help_scroll.max_offset().height),
             volume: view.settings.value().volume,
             shuffle: view.transport.queue().is_shuffled(),
             page: page.into(),
@@ -403,6 +426,14 @@ impl Snapshot {
             && field!(library_loading)
             && field!(show_help)
             && expected
+                .help_scroll_y
+                .is_none_or(|y| (self.help_scroll_y - y).abs() < 0.1)
+            && expected.help_scrolled_to_bottom.is_none_or(|bottom| {
+                bottom
+                    == (self.help_scroll_max > 0.
+                        && (self.help_scroll_y + self.help_scroll_max).abs() < 0.1)
+            })
+            && expected
                 .search_summary
                 .as_ref()
                 .is_none_or(|summary| summary == &self.rendered.search_summary)
@@ -432,6 +463,9 @@ impl Snapshot {
                 .as_ref()
                 .is_none_or(|hints| hints == &self.rendered.shortcut_hints)
             && field!(current_track)
+            && field!(current_liked)
+            && field!(current_like_pending)
+            && field!(selected_liked)
             && field!(queue_len)
             && field!(queue_last)
             && expected

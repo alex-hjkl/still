@@ -17,19 +17,24 @@
 | Left / Right, `H` / `L` | Seek backward / forward 10 seconds |
 | `-` / `+` (or `=`) | Decrease / increase volume by 5% |
 | `s` | Toggle shuffle without restarting the current song |
-| `f` / `F` | Toggle like for the selected / current song |
+| `f` / `F` | Toggle like for the current song; with an empty queue, `f` uses the selected song |
 | Command+1 through Command+5 | Artists, Albums, Songs, Folders, Liked songs |
 | Tab / Shift+Tab | Next / previous section |
 | `r` / `e` | Refresh / load more records |
 | `?`, F1 | Open / close keyboard help |
 | Escape in help | Close help |
+| `j` / `k`, Up / Down in help | Scroll keyboard help |
 | Command+B | Switch compact / expanded sidebar |
 | Command+Q | Quit, including while editing a field |
 
 Text fields retain normal text-editing behavior. Left / Right moves the caret
 while search is focused. Section shortcuts and Command+B remain available there.
 Playback shortcuts work while help is open; browsing commands do not act on the
-covered list. Help also closes through Close or a click outside the panel.
+covered list. With an empty queue, Space and `f` do not act on the covered selection.
+Help also closes through Close or a click outside the panel.
+
+The current song remains the target of `f` when paused or browsing another section.
+To like another song during playback, click its heart in the list or preview.
 
 The header search field searches Navidrome for artists, albums and songs across
 the entire library. Results update as you type. Enter opens an artist

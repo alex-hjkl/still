@@ -35,6 +35,35 @@ pub enum Command {
 }
 
 impl Command {
+    pub fn is_playback(self) -> bool {
+        matches!(
+            self,
+            Self::Toggle
+                | Self::Shuffle
+                | Self::Next
+                | Self::Previous
+                | Self::Like
+                | Self::LikeCurrent
+                | Self::Seek(_)
+                | Self::Volume(_)
+        )
+    }
+
+    pub fn available_with_help(self) -> bool {
+        self.is_playback()
+            || matches!(
+                self,
+                Self::Down
+                    | Self::Up
+                    | Self::Escape
+                    | Self::Help
+                    | Self::Section(_)
+                    | Self::Cycle(_)
+                    | Self::ToggleSidebar
+                    | Self::FocusSearch
+            )
+    }
+
     fn available_while_editing(self) -> bool {
         matches!(
             self,
@@ -168,6 +197,7 @@ mod tests {
             "h",
             "l",
             "f",
+            "shift-f",
             "s",
             "space",
             "3",
@@ -197,6 +227,33 @@ mod tests {
             keys.command_in_context(&key("f"), false),
             Some(Command::Like)
         );
+    }
+
+    #[test]
+    fn help_keeps_all_player_commands_available_without_acting_on_the_covered_list() {
+        let mut keys = Keys::default();
+        for stroke in [
+            "space", "s", "[", "]", "f", "shift-f", "left", "right", "shift-h", "shift-l", "-", "=",
+        ] {
+            let command = keys.command(&key(stroke)).unwrap();
+            assert!(command.is_playback(), "{stroke}");
+            assert!(command.available_with_help(), "{stroke}");
+            assert!(
+                keys.command_in_context(&key(stroke), true).is_none(),
+                "{stroke}"
+            );
+        }
+        for stroke in ["j", "k", "down", "up"] {
+            let command = keys.command(&key(stroke)).unwrap();
+            assert!(command.available_with_help(), "{stroke}");
+            assert!(!command.is_playback(), "{stroke}");
+        }
+        for stroke in ["enter", "shift-enter", "h", "l", "r", "e"] {
+            assert!(
+                !keys.command(&key(stroke)).unwrap().available_with_help(),
+                "{stroke}"
+            );
+        }
     }
 
     #[test]

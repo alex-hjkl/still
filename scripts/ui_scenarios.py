@@ -155,7 +155,7 @@ def scenario(launch, tracks):
         dict(action="wait", milliseconds=800), expect(page="songs", current_track="song-1", queue_len=120),
         key("space"), expect(playback="paused"),
         key("cmd-4"), folder("", music, columns=dict(current="", preview=music)),
-        expect(footer_hints=["j k Move", "Enter Open / play", "h Parent", "⇧ Enter Play folder", "/ Search"], footer_fits=True),
+        expect(footer_hints=["j k Move", "Enter Open / play", "h Parent", "⇧ Enter Play folder", "f Like current", "/ Search"], footer_fits=True),
         key("l"), folder(music, collection, columns=dict(parent="", current=music, preview=collection)),
         key("l"), expect(path=collection, loaded=True),  # The original UTF-8 crash.
         key("j"), expect(selected=film),

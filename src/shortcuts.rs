@@ -160,14 +160,17 @@ pub const VOLUME: Shortcut = Shortcut::new("− / +", "Volume down / up 5%").bin
     Binding::key("+", Volume(0.05)).any_shift(),
     Binding::key("=", Volume(0.05)).any_shift(),
 ]);
-pub const LIKE: Shortcut = Shortcut::new("f / F", "Toggle like: selected / playing")
-    .primary("f")
-    .footer("f")
-    .bindings(&[
-        Binding::key("f", Like),
-        Binding::key("f", LikeCurrent).shifted(),
-        Binding::key("F", LikeCurrent).any_shift(),
-    ]);
+pub const LIKE: Shortcut = Shortcut::new(
+    "f / F",
+    "Toggle like: current; f uses selection if queue empty",
+)
+.primary("f")
+.footer("f")
+.bindings(&[
+    Binding::key("f", Like),
+    Binding::key("f", LikeCurrent).shifted(),
+    Binding::key("F", LikeCurrent).any_shift(),
+]);
 pub const CYCLE: Shortcut =
     Shortcut::new("Tab / Shift+Tab", "Next / previous section").bindings(&[
         Binding::key("tab", Cycle(1)),
@@ -239,7 +242,10 @@ pub fn help_groups() -> [(&'static str, Vec<(String, &'static str)>); 2] {
     ]
 }
 
-pub fn footer_hints(page: &crate::browser::Page) -> Vec<(&'static str, &'static str)> {
+pub fn footer_hints(
+    page: &crate::browser::Page,
+    has_current: bool,
+) -> Vec<(&'static str, &'static str)> {
     use crate::browser::Page;
     let mut hints = vec![MOVE.footer_hint("Move")];
     match page {
@@ -269,6 +275,13 @@ pub fn footer_hints(page: &crate::browser::Page) -> Vec<(&'static str, &'static 
         Page::Songs => hints.extend([OPEN.footer_hint("Play"), LIKE.footer_hint("Like")]),
         Page::Search(_) => {
             hints.extend([OPEN.footer_hint("Open / play"), ESCAPE.footer_hint("Back")])
+        }
+    }
+    if has_current {
+        if let Some(hint) = hints.iter_mut().find(|(key, _)| *key == LIKE.footer) {
+            *hint = LIKE.footer_hint("Like current");
+        } else {
+            hints.push(LIKE.footer_hint("Like current"));
         }
     }
     hints.push(FIND.footer_hint("Search"));

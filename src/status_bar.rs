@@ -3,7 +3,10 @@ use super::*;
 impl PlayerView {
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let hints = shortcuts::footer_hints(&self.library.browser().state().page);
+        let hints = shortcuts::footer_hints(
+            &self.library.browser().state().page,
+            self.transport.queue().current().is_some(),
+        );
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().footer_hints = hints

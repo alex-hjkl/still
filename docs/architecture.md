@@ -68,8 +68,10 @@ where practical; views adapt user input and asynchronous results to those models
   screen rendering and view-specific interactions.
 - `navigation.rs`: section ordering, persisted identities, names, icons and shortcuts.
 - `shortcuts.rs`: key bindings and descriptions shared by dispatch, keyboard help,
-  contextual hints and tooltips. `keyboard.rs` owns editing and Vim prefix rules;
-  `input.rs` handles native Unicode/IME text input.
+  contextual hints and tooltips. `keyboard.rs` owns editing, help availability and
+  Vim prefix rules; `input.rs` handles native Unicode/IME text input.
+  Player commands target the playback queue independently of browser selection.
+  With an empty queue, Space and `f` fall back to the visible selection, except under help.
 - `requests.rs`, `failure.rs`: stale-request cancellation and operation-specific Retry.
   Library, playback and each song's like have independent failures. Navigation clears
   only the library failure; connection failures belong to the connection controller.

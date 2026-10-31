@@ -1,6 +1,13 @@
 use super::*;
 
 impl PlayerView {
+    pub(super) fn scroll_help(&self, delta: f32, cx: &mut Context<Self>) {
+        let mut offset = self.help_scroll.offset();
+        offset.y = (offset.y + px(delta)).clamp(-self.help_scroll.max_offset().height, px(0.));
+        self.help_scroll.set_offset(offset);
+        cx.notify();
+    }
+
     pub(super) fn help_overlay(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
         let width =
@@ -50,9 +57,18 @@ impl PlayerView {
                             .child(
                                 div()
                                     .flex_1()
-                                    .text_size(px(22.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("Keyboard shortcuts"),
+                                    .child(
+                                        div()
+                                            .text_size(px(22.))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Keyboard shortcuts"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(TEXT_CAPTION))
+                                            .text_color(rgb(colors.muted))
+                                            .child("j / k · ↑ / ↓ Scroll"),
+                                    ),
                             )
                             .child(
                                 button(colors, "close-help", shortcuts::ESCAPE.hint("Close"))
@@ -77,6 +93,7 @@ impl PlayerView {
             .min_h_0()
             .min_w_0()
             .overflow_y_scroll()
+            .track_scroll(&self.help_scroll)
             .child(
                 div()
                     .w_full()

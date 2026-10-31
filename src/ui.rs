@@ -93,6 +93,7 @@ pub struct PlayerView {
     folder_parent_scroll: UniformListScrollHandle,
     folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
+    help_scroll: gpui::ScrollHandle,
     theme_menu: Option<ThemeMenu>,
     search_delay: Option<gpui::Task<()>>,
     seek_slider: Entity<Slider>,
@@ -172,6 +173,7 @@ impl PlayerView {
             folder_parent_scroll: UniformListScrollHandle::new(),
             folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
+            help_scroll: gpui::ScrollHandle::new(),
             theme_menu: None,
             search_delay: None,
             seek_slider,
@@ -1018,25 +1020,12 @@ impl PlayerView {
         };
         cx.stop_propagation();
         window.prevent_default();
-        if self.show_help
-            && !matches!(
-                command,
-                Command::Escape
-                    | Command::Help
-                    | Command::Section(_)
-                    | Command::Cycle(_)
-                    | Command::ToggleSidebar
-                    | Command::FocusSearch
-                    | Command::Toggle
-                    | Command::Shuffle
-                    | Command::Next
-                    | Command::Previous
-                    | Command::LikeCurrent
-                    | Command::Seek(_)
-                    | Command::Volume(_)
-            )
-        {
+        if self.show_help && !command.available_with_help() {
             self.keys.reset();
+            return;
+        }
+        if self.show_help && matches!(command, Command::Down | Command::Up) {
+            self.scroll_help(if command == Command::Down { -40. } else { 40. }, cx);
             return;
         }
         if command == Command::ToggleSidebar {
@@ -1126,14 +1115,16 @@ impl PlayerView {
             Next => self.next(cx),
             Previous => self.previous(cx),
             Like | LikeCurrent => {
-                let song = if command == LikeCurrent {
-                    self.transport.queue().current().cloned()
-                } else {
-                    self.visible_entries()
-                        .get(self.library.browser().state().cursor)
-                        .and_then(|entry| self.entry_song(entry))
-                        .cloned()
-                };
+                let song = self.transport.queue().current().cloned().or_else(|| {
+                    if command == Like && !self.show_help && !self.library.is_loading(cx) {
+                        self.visible_entries()
+                            .get(self.library.browser().state().cursor)
+                            .and_then(|entry| self.entry_song(entry))
+                            .cloned()
+                    } else {
+                        None
+                    }
+                });
                 if let Some(song) = song {
                     self.toggle_like(song, cx);
                 }
