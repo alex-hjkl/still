@@ -2,9 +2,12 @@
 
 A keyboard-first Navidrome music player built with Rust and GPUI.
 
-macOS is the primary platform. CI builds macOS (Apple Silicon and Intel), Linux
-(x86_64), and Windows (x86_64). Linux and Windows do not yet integrate with system
-media keys / Now Playing. Windows runtime validation is pending.
+**macOS-first.** Development and testing focus on macOS. Linux and Windows
+receive limited testing: Linux has native smoke checks on Wayland and X11,
+while Windows runtime validation is still pending.
+
+CI builds macOS (Apple Silicon and Intel), Linux (x86_64) and Windows (x86_64).
+System media keys / Now Playing are currently available only on macOS.
 
 Navigation uses Vim-style motions (`h`, `j`, `k`, `l`), with keyboard controls inspired
 by [Yazi](https://yazi-rs.github.io/),
@@ -82,17 +85,23 @@ To add the Linux app and its icon to your application menu, run
 
 ## Keyboard controls
 
+`Command` / `⌘` means Command on macOS, Super on Linux and Win on Windows.
+
 | Shortcut | Action |
 | --- | --- |
 | `j` / `k`, Up / Down | Move selection |
 | `h` / `l`, Backspace / Enter | Go back / open or play |
+| Shift+Enter | Play selected artist, album, folder or song |
 | `/`, Command+F | Focus library search |
-| Space | Play / pause |
+| Space | Play / pause; open the selection if the queue is empty |
 | `[` / `]` | Previous / next song |
 | Left / Right | Seek backward / forward 10 seconds |
+| `s` | Toggle shuffle |
+| `f` / `F` | Toggle like for the current song; with an empty queue, `f` uses the selected song |
 | Command+1 through Command+5 | Switch sections |
 | Command+B | Switch compact / expanded sidebar |
 | `?`, F1 | Keyboard help |
+| `j` / `k`, Up / Down in help | Scroll keyboard help |
 | Command+Q | Quit |
 
 [All keyboard and mouse controls](docs/shortcuts.md).
@@ -100,7 +109,7 @@ To add the Linux app and its icon to your application menu, run
 ## Folder browsing
 
 Enable **Report Real Path** for the Still player in Navidrome's **Players** settings,
-then refresh Folders. These are paths on the Navidrome server, not your Mac.
+then refresh Folders. These are paths on the Navidrome server, not your device.
 Folder browsing includes indexed audio files and their parent folders.
 
 The search field searches the entire library. Clear it to return to the previous list.
@@ -109,15 +118,18 @@ playlist management, repeat mode or persistent playback queue.
 
 ## Preferences and logs
 
-- Preferences: `~/Library/Application Support/Still/preferences.json`
-- Diagnostic log: `~/Library/Logs/Still/still.log`
+| Platform | Preferences | Diagnostic log |
+| --- | --- | --- |
+| macOS | `~/Library/Application Support/Still/preferences.json` | `~/Library/Logs/Still/still.log` |
+| Linux | `~/.config/still/preferences.json` | `~/.local/state/still/logs/still.log` |
+| Windows | `%APPDATA%\Still\preferences.json` | `%LOCALAPPDATA%\Still\logs\still.log` |
 
-On Linux, preferences use `$XDG_CONFIG_HOME/still` (default `~/.config/still`)
-and logs use `$XDG_STATE_HOME/still/logs` (default `~/.local/state/still/logs`).
-On Windows, they use `%APPDATA%\Still` and `%LOCALAPPDATA%\Still\logs` respectively.
+On Linux, `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` override the base directories
+for preferences and logs respectively.
 
 Theme, volume, shuffle, sidebar mode, window size, last section and folder selection are
-restored between sessions. Connection credentials are stored separately in Keychain.
+restored between sessions. Connection credentials are stored separately in the
+platform credential store.
 
 ## Development
 

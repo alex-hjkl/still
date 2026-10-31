@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Still
-Comment=A quiet Navidrome music player
+Comment=A keyboard-first Navidrome music player
 Exec=still
 Icon=com.still.player
 Terminal=false

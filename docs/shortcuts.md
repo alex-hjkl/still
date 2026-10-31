@@ -1,11 +1,14 @@
 # Keyboard and mouse
 
+`Command` / `⌘` means Command on macOS, Super on Linux and Win on Windows.
+`Ctrl` always means Control.
+
 | Shortcut | Action |
 | --- | --- |
 | `j` / `k`, Up / Down | Select the next / previous record |
 | `h` / `l` | Go back / open or play; in Folders, parent / selected child |
 | Enter / Backspace | Open or play / go back |
-| Shift+Enter | Play a folder and its subfolders |
+| Shift+Enter | Play selected artist, album, folder or song |
 | `gg` / `G`, Home / End | First / last record |
 | Ctrl+D / Ctrl+U | Half a page down / up |
 | Ctrl+F / Ctrl+B, PageDown / PageUp | Page down / up |
@@ -26,6 +29,10 @@
 | `j` / `k`, Up / Down in help | Scroll keyboard help |
 | Command+B | Switch compact / expanded sidebar |
 | Command+Q | Quit, including while editing a field |
+
+Shift+Enter includes subfolders when playing a folder. With a song selected in
+Folders, it plays the current folder and its subfolders. In an open album or
+Liked songs, it starts the entire list from the first song.
 
 Text fields retain normal text-editing behavior. Left / Right moves the caret
 while search is focused. Section shortcuts and Command+B remain available there.

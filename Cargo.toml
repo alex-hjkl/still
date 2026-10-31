@@ -3,7 +3,7 @@ name = "still"
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.99.1"
-description = "A quiet GPUI music player for Navidrome"
+description = "A keyboard-first Navidrome music player built with Rust and GPUI"
 
 [features]
 ui-tests = []
