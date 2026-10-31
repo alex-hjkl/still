@@ -3,6 +3,7 @@ use super::*;
 impl PlayerView {
     pub(super) fn shortcut_badge(
         &self,
+        colors: Palette,
         _id: &'static str,
         label: impl Into<SharedString>,
     ) -> gpui::Div {
@@ -19,15 +20,15 @@ impl PlayerView {
             .h(px(24.))
             .flex_shrink_0()
             .rounded_sm()
-            .bg(rgb(SELECTED))
+            .bg(rgb(colors.selected))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors.border))
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(12.))
+            .text_size(px(TEXT_CAPTION))
             .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_color(rgb(ACCENT))
+            .text_color(rgb(colors.accent))
             .child(label)
     }
 
@@ -72,12 +73,14 @@ impl PlayerView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let colors = crate::theme::colors(cx);
         let compact = self.settings.value().sidebar_compact;
         let hints = window.is_window_active() && section_hints(window.modifiers());
         icon_button(
+            colors,
             "toggle-sidebar",
             if hints {
-                self.shortcut_badge("toggle-sidebar", shortcuts::SIDEBAR.keys)
+                self.shortcut_badge(colors, "toggle-sidebar", shortcuts::SIDEBAR.keys)
                     .into_any_element()
             } else {
                 icon(
@@ -86,7 +89,7 @@ impl PlayerView {
                     } else {
                         "sidebar-collapse"
                     },
-                    MUTED,
+                    colors.muted,
                 )
                 .into_any_element()
             },
@@ -113,6 +116,7 @@ impl PlayerView {
     }
 
     pub(super) fn sidebar(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let compact = self.settings.value().sidebar_compact;
         let width = self.sidebar_width();
         let item_width = width - 24.;
@@ -120,7 +124,11 @@ impl PlayerView {
         {
             self.ui_probe.borrow_mut().sidebar_width = width;
         }
-        let selected = self.section_index();
+        let selected = if matches!(self.browser.state().page, Page::Search(_)) {
+            usize::MAX
+        } else {
+            self.section_index()
+        };
         let hints = window.is_window_active() && section_hints(window.modifiers());
         let server_label = if self.demo {
             "Demo · no playback".to_owned()
@@ -147,9 +155,9 @@ impl PlayerView {
             .w(px(width))
             .flex_shrink_0()
             .h_full()
-            .bg(rgb(PANEL))
+            .bg(rgb(colors.panel))
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors.border))
             .flex()
             .flex_col()
             .items_start()
@@ -165,7 +173,7 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(self.sidebar_icon_slot("brand", app_icon(32.)))
+                    .child(self.sidebar_icon_slot("brand", app_icon(colors, 32.)))
                     .when(!compact, |view| view.child(wordmark(23.))),
             )
             .children(Section::ALL.into_iter().map(|info| {
@@ -184,16 +192,28 @@ impl PlayerView {
                     .gap_2()
                     .rounded_md()
                     .cursor_pointer()
-                    .text_color(rgb(if selected == index { ACCENT } else { MUTED }))
-                    .when(selected == index, |view| view.bg(rgb(SELECTED)))
-                    .hover(|view| view.bg(rgb(HOVER)))
+                    .text_color(rgb(if selected == index {
+                        colors.accent
+                    } else {
+                        colors.muted
+                    }))
+                    .when(selected == index, |view| view.bg(rgb(colors.selected)))
+                    .hover(move |view| view.bg(rgb(colors.hover)))
                     .child(self.sidebar_icon_slot(
                         glyph,
                         if hints {
-                            self.shortcut_badge(glyph, info.shortcut).into_any_element()
-                        } else {
-                            icon(glyph, if selected == index { ACCENT } else { MUTED })
+                            self.shortcut_badge(colors, glyph, info.shortcut)
                                 .into_any_element()
+                        } else {
+                            icon(
+                                glyph,
+                                if selected == index {
+                                    colors.accent
+                                } else {
+                                    colors.muted
+                                },
+                            )
+                            .into_any_element()
                         },
                     ))
                     .when(!compact, |view| {
@@ -215,11 +235,11 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_color(rgb(MUTED))
-                    .text_xs()
+                    .text_color(rgb(colors.muted))
+                    .text_size(px(TEXT_CAPTION))
                     .child(self.sidebar_icon_slot(
                         "connection-status",
-                        div().text_color(rgb(ACCENT)).child("●"),
+                        div().text_color(rgb(colors.accent)).child("●"),
                     ))
                     .when(!compact, |view| {
                         view.child(
@@ -242,10 +262,10 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors.muted))
                     .cursor_pointer()
-                    .when(self.show_help, |view| view.bg(rgb(SELECTED)))
-                    .hover(|view| view.bg(rgb(HOVER)))
+                    .when(self.show_help, |view| view.bg(rgb(colors.selected)))
+                    .hover(move |view| view.bg(rgb(colors.hover)))
                     .child(
                         self.sidebar_icon_slot(
                             "keyboard-help",
@@ -253,7 +273,11 @@ impl PlayerView {
                         ),
                     )
                     .when(!compact, |view| {
-                        view.child(div().text_sm().child("Keyboard shortcuts"))
+                        view.child(
+                            div()
+                                .text_size(px(TEXT_SECONDARY))
+                                .child("Keyboard shortcuts"),
+                        )
                     })
                     .tooltip(|_, cx| {
                         cx.new(|_| Hint::new(shortcuts::HELP.hint("Keyboard shortcuts")))
@@ -275,12 +299,12 @@ impl PlayerView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors.muted))
                     .cursor_pointer()
-                    .hover(|view| view.bg(rgb(HOVER)))
-                    .child(self.sidebar_icon_slot("disconnect", icon("logout", MUTED)))
+                    .hover(move |view| view.bg(rgb(colors.hover)))
+                    .child(self.sidebar_icon_slot("disconnect", icon("logout", colors.muted)))
                     .when(!compact, |view| {
-                        view.child(div().text_sm().child(disconnect_label))
+                        view.child(div().text_size(px(TEXT_SECONDARY)).child(disconnect_label))
                     })
                     .tooltip(move |_, cx| cx.new(|_| Hint::new(disconnect_label)).into())
                     .on_click(cx.listener(|this, _, window, cx| this.disconnect(window, cx))),

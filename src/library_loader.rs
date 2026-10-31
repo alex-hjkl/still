@@ -14,6 +14,7 @@ impl LibraryRequest {
             Page::Artists => LibraryData::Artists(client.artists()?),
             Page::Albums => LibraryData::Albums(client.albums(self.offset)?),
             Page::Songs => LibraryData::Songs(client.songs(self.offset)?),
+            Page::Search(query) => LibraryData::Search(client.search(query, self.offset)?),
             Page::Liked => LibraryData::Songs(client.liked_songs()?),
             Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
             Page::Album(album) => LibraryData::Album(client.album(&album.id)?),

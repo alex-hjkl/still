@@ -18,7 +18,10 @@ https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
 - Navigate folders in parent, current and preview columns with `h`, `j`, `k`, `l`.
 - Stream music with queue advancement, shuffle, seeking, volume and mute.
 - Control playback with macOS media keys and Now Playing.
-- Find within loaded lists and switch between compact and expanded sidebars.
+- Search your entire library for artists, albums and songs.
+- Switch between compact and expanded sidebars.
+- Switch between [Catppuccin](https://catppuccin.com/palette/) Latte (light) and
+  Macchiato (dark) in the appearance menu, or follow the system theme. Your choice is saved.
 
 ## Run
 
@@ -83,7 +86,7 @@ To add the Linux app and its icon to your application menu, run
 | --- | --- |
 | `j` / `k`, Up / Down | Move selection |
 | `h` / `l`, Backspace / Enter | Go back / open or play |
-| `/`, Command+F | Find in the loaded list |
+| `/`, Command+F | Focus library search |
 | Space | Play / pause |
 | `[` / `]` | Previous / next song |
 | Left / Right | Seek backward / forward 10 seconds |
@@ -100,7 +103,8 @@ Enable **Report Real Path** for the Still player in Navidrome's **Players** sett
 then refresh Folders. These are paths on the Navidrome server, not your Mac.
 Folder browsing includes indexed audio files and their parent folders.
 
-Find searches only the currently loaded records. There is no offline mode,
+The search field searches the entire library. Clear it to return to the previous list.
+There is no offline mode,
 playlist management, repeat mode or persistent playback queue.
 
 ## Preferences and logs
@@ -112,7 +116,7 @@ On Linux, preferences use `$XDG_CONFIG_HOME/still` (default `~/.config/still`)
 and logs use `$XDG_STATE_HOME/still/logs` (default `~/.local/state/still/logs`).
 On Windows, they use `%APPDATA%\Still` and `%LOCALAPPDATA%\Still\logs` respectively.
 
-Volume, shuffle, sidebar mode, window size, last section and folder selection are
+Theme, volume, shuffle, sidebar mode, window size, last section and folder selection are
 restored between sessions. Connection credentials are stored separately in Keychain.
 
 ## Development

@@ -107,3 +107,21 @@ mod tests {
         }
     }
 }
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SearchResults {
+    #[serde(default, rename = "artist", deserialize_with = "null_as_empty")]
+    pub artists: Vec<Artist>,
+    #[serde(default, rename = "album", deserialize_with = "null_as_empty")]
+    pub albums: Vec<Album>,
+    #[serde(default, rename = "song", deserialize_with = "null_as_empty")]
+    pub songs: Vec<Song>,
+}
+
+fn null_as_empty<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}

@@ -105,12 +105,12 @@ def scenario():
                   key("left"), expect(playback="paused", position_min=target, position_max=target + 5), wait(650)]
     steps += [wait(3000)]
     steps += gesture("backspace", "⌫", "Back to albums", pause=2800, page="albums")
-    steps += [hint("/", "Find in this list"), key("/"), expect(focus="filter")]
+    steps += [hint("/", "Search your library"), key("/"), expect(focus="search")]
     for character in "light":
         steps += [dict(action="text", text=character), wait(100)]
-    steps += [expect(filter="light", find_summary="1 of 6 loaded albums"), wait(2800)]
-    steps += [hint("Esc × 2", "Return to the list and clear Find"),
-              dict(action="key_burst", keys=["escape", "escape"]), expect(filter="", focus=""), wait(2800)]
+    steps += [expect(page="search", search="light", search_counts=[0, 1, 6]), wait(2800)]
+    steps += [hint("Esc × 2", "Return to the album list"),
+              dict(action="key_burst", keys=["escape", "escape"]), expect(search="", focus=""), wait(2800)]
     steps += gesture("cmd-4", "⌘4", "Browse folders", pause=3000, loaded=True, page="folders", path="/Music/Mira Sol")
     steps += gesture("l", "l", "Move into album", pause=2500, path="/Music/Mira Sol/First Light")
     steps += gesture("h", "h", "Move to parent column", pause=2500, path="/Music/Mira Sol")

@@ -1,5 +1,5 @@
 //! Shared GPUI building blocks; screen-specific actions stay in the views.
-use crate::theme::{BORDER, ERROR_BG, ERROR_TEXT, HOVER, MUTED, ON_ACCENT, PANEL, TEXT};
+use crate::theme::{Palette, TEXT_SECONDARY};
 use gpui::{Context, IntoElement, Render, SharedString, Window, div, prelude::*, px, rgb, svg};
 
 pub fn icon_sized(name: &'static str, color: u32, edge: f32) -> gpui::Svg {
@@ -26,6 +26,7 @@ pub fn wordmark(size: f32) -> gpui::Div {
 }
 
 pub fn button(
+    colors: Palette,
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
@@ -38,13 +39,14 @@ pub fn button(
         .px_4()
         .py_2()
         .rounded_md()
-        .bg(rgb(HOVER))
-        .text_color(rgb(TEXT))
+        .bg(rgb(colors.hover))
+        .text_color(rgb(colors.text))
         .cursor_pointer()
         .child(label.into())
 }
 
 pub fn icon_button(
+    colors: Palette,
     id: impl Into<gpui::ElementId>,
     content: impl IntoElement,
 ) -> gpui::Stateful<gpui::Div> {
@@ -57,26 +59,28 @@ pub fn icon_button(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|view| view.bg(rgb(HOVER)))
+        .hover(move |view| view.bg(rgb(colors.hover)))
         .child(content)
 }
 
 pub fn toolbar_icon(
+    colors: Palette,
     id: &'static str,
     glyph: &'static str,
     hint: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     let hint = hint.into();
-    icon_button(id, icon(glyph, MUTED))
+    icon_button(colors, id, icon(glyph, colors.muted))
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint.clone())).into())
 }
 
 pub fn row_play_button(
+    colors: Palette,
     id: SharedString,
     hint: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     let hint = hint.into();
-    icon_button(id, icon_sized("play", MUTED, 16.))
+    icon_button(colors, id, icon_sized("play", colors.muted, 16.))
         .size(px(28.))
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint.clone())).into())
 }
@@ -90,19 +94,20 @@ impl Hint {
 }
 
 impl Render for Hint {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         div()
             .px_3()
             .py_2()
             .rounded_md()
-            .bg(rgb(TEXT))
-            .text_color(rgb(ON_ACCENT))
-            .text_sm()
+            .bg(rgb(colors.tooltip_bg))
+            .text_color(rgb(colors.tooltip_text))
+            .text_size(px(TEXT_SECONDARY))
             .child(self.0.clone())
     }
 }
 
-pub fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
+pub fn track_row(colors: Palette, id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .w_full()
@@ -112,18 +117,18 @@ pub fn track_row(id: usize, height: f32) -> gpui::Stateful<gpui::Div> {
         .gap_4()
         .px_3()
         .border_b_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors.row_border))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(PANEL)))
+        .hover(move |s| s.bg(rgb(colors.panel)))
 }
 
-pub fn notification(message: impl Into<SharedString>) -> gpui::Div {
+pub fn notification(colors: Palette, message: impl Into<SharedString>) -> gpui::Div {
     div()
         .flex_shrink_0()
         .p_3()
         .rounded_md()
-        .bg(rgb(ERROR_BG))
-        .text_color(rgb(ERROR_TEXT))
+        .bg(rgb(colors.error_bg))
+        .text_color(rgb(colors.error_text))
         .flex()
         .items_center()
         .gap_3()
@@ -134,4 +139,35 @@ pub fn notification(message: impl Into<SharedString>) -> gpui::Div {
                 .whitespace_normal()
                 .child(message.into()),
         )
+}
+
+pub fn count_label(count: usize, noun: &str) -> String {
+    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
+}
+
+pub fn empty_state(colors: Palette, message: &str) -> gpui::AnyElement {
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .text_color(rgb(colors.muted))
+        .child(
+            svg()
+                .path("songs")
+                .size(px(32.))
+                .text_color(rgb(colors.artwork_icon)),
+        )
+        .child(message.to_owned())
+        .into_any_element()
+}
+
+pub fn toolbar_button(
+    colors: Palette,
+    id: &'static str,
+    glyph: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    icon_button(colors, id, icon(glyph, colors.muted))
 }

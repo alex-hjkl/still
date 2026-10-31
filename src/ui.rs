@@ -22,24 +22,26 @@ use crate::{
     settings::{SavedFolder, Settings},
     shortcuts,
     slider::{CommitMode, Slider, SliderEvent},
-    theme::{
-        ACCENT, ACCENT_HOVER, ARTWORK_ICON, BG, BORDER, ERROR_BG, ERROR_TEXT, HOVER,
-        KEYBOARD_FOCUS, LIKED, MUTED, ON_ACCENT, PANEL, SELECTED, TEXT,
-    },
-    ui_components::{
-        Hint, button, icon, icon_button, icon_sized, notification, row_play_button, toolbar_icon,
-        track_row, wordmark,
-    },
+    theme::{Palette, TEXT_BODY, TEXT_CAPTION, TEXT_SECONDARY, ThemePreference},
 };
 use gpui::{
     Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, ScrollStrategy,
     SharedString, Subscription, UniformListScrollHandle, Window, WindowBounds, div, prelude::*, px,
-    relative, rgb, svg, uniform_list,
+    relative, rgb, uniform_list,
 };
 use std::{sync::Arc, time::Duration};
 
+use crate::ui_components::{
+    Hint, button, count_label, empty_state, icon, icon_button, icon_sized, notification,
+    row_play_button, toolbar_button, toolbar_icon, track_row, wordmark,
+};
 #[path = "connection_screen.rs"]
 mod connection_screen;
+#[path = "theme_picker.rs"]
+mod theme_picker;
+use theme_picker::ThemeMenu;
+#[path = "demo.rs"]
+mod demo;
 #[path = "folder_columns.rs"]
 mod folder_columns;
 #[path = "keyboard_help.rs"]
@@ -53,6 +55,8 @@ pub(crate) use ui_tests::start_ui_test;
 mod library_view;
 #[path = "player_bar.rs"]
 mod player_bar;
+#[path = "search_view.rs"]
+mod search_view;
 #[path = "sidebar.rs"]
 mod sidebar;
 #[path = "status_bar.rs"]
@@ -76,7 +80,7 @@ pub struct PlayerView {
     server: Entity<TextInput>,
     username: Entity<TextInput>,
     password: Entity<TextInput>,
-    filter: Entity<TextInput>,
+    search: Entity<TextInput>,
     subscriptions: Vec<Subscription>,
     library_focus: FocusHandle,
     focus_library: bool,
@@ -87,6 +91,8 @@ pub struct PlayerView {
     folder_parent_scroll: UniformListScrollHandle,
     folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
+    theme_menu: Option<ThemeMenu>,
+    search_delay: Option<gpui::Task<()>>,
     seek_slider: Entity<Slider>,
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
@@ -130,8 +136,8 @@ impl PlayerView {
                 cx,
             )
         });
-        let filter =
-            cx.new(|cx| TextInput::new("Find in this list", String::new(), false, cx).clearable());
+        let search =
+            cx.new(|cx| TextInput::new("Search library", String::new(), false, cx).clearable());
         let seek_slider = cx.new(|_| Slider::new("seek", CommitMode::OnRelease));
         let volume_slider = cx.new(|_| Slider::new("volume-slider", CommitMode::Continuous));
         let library_loader = cx.new(|_| LibraryLoader::default());
@@ -142,6 +148,16 @@ impl PlayerView {
             .any(|name| std::env::var_os(name).is_some());
         let connection = cx.new(|_| ConnectionController::new(environment_connection));
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
+            // Wayland holds its platform state while delivering this event.
+            // Read the current appearance after that callback has returned.
+            cx.on_next_frame(window, |this, _, cx| {
+                this.settings
+                    .value()
+                    .theme
+                    .follow_appearance(cx.window_appearance(), cx);
+            });
+        }));
         subscriptions.push(cx.subscribe(&connection, |this, _, event, cx| {
             match event {
                 ConnectionEvent::Restored(connection) => {
@@ -199,7 +215,13 @@ impl PlayerView {
                 this.set_volume(*value, cx);
             }
         }));
-        subscriptions.push(cx.observe_window_activation(window, |this, _, cx| {
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            cx.on_next_frame(window, |this, _, cx| {
+                this.settings
+                    .value()
+                    .theme
+                    .follow_appearance(cx.window_appearance(), cx);
+            });
             this.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
             this.volume_slider
                 .update(cx, |slider, cx| slider.cancel(cx));
@@ -254,15 +276,14 @@ impl PlayerView {
             ));
         }
         subscriptions.push(
-            cx.subscribe_in(&filter, window, |this, input, event, window, cx| {
+            cx.subscribe_in(&search, window, |this, input, event, window, cx| {
                 match event {
                     InputEvent::Change => {
-                        if this.browser.set_query(input.read(cx).value()) {
-                            this.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                        }
+                        this.search_changed(input.read(cx).value(), window, cx);
                         this.remember_folder(cx);
                     }
                     InputEvent::Submit | InputEvent::Next(_) => {
+                        this.submit_search(cx);
                         window.focus(&this.library_focus);
                         this.keyboard_active = true;
                         this.reveal_cursor();
@@ -290,7 +311,7 @@ impl PlayerView {
             server,
             username,
             password,
-            filter,
+            search,
             subscriptions,
             library_focus: cx.focus_handle(),
             focus_library: demo,
@@ -301,6 +322,8 @@ impl PlayerView {
             folder_parent_scroll: UniformListScrollHandle::new(),
             folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
+            theme_menu: None,
+            search_delay: None,
             seek_slider,
             volume_slider,
             unmuted_volume: if initial_volume > 0. {
@@ -414,6 +437,7 @@ impl PlayerView {
         retry: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let id: SharedString = match &target {
             FailureTarget::Connection => "retry-connection".into(),
             FailureTarget::Operation(Operation::Library) => "retry-library".into(),
@@ -423,10 +447,10 @@ impl PlayerView {
         };
         #[cfg(feature = "ui-tests")]
         self.ui_probe.borrow_mut().failures.push(id.to_string());
-        notification(message)
+        notification(colors, message)
             .when(retry, |view| {
                 view.child(
-                    button(id, "Retry").on_click(
+                    button(colors, id, "Retry").on_click(
                         cx.listener(move |this, _, _, cx| this.retry(target.clone(), cx)),
                     ),
                 )
@@ -434,17 +458,25 @@ impl PlayerView {
             .into_any_element()
     }
 
-    fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
+    fn reset_library_load(&mut self, cx: &mut Context<Self>) {
+        self.search_delay = None;
         self.library_loader.update(cx, |loader, _| loader.cancel());
+        self.failures.clear(&Operation::Library);
+    }
+
+    fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
+        self.reset_library_load(cx);
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
         self.list_scroll = UniformListScrollHandle::new();
         self.reset_folder_columns();
-        let text = self.browser.state().filter_text.clone();
-        self.filter
+        let text = match &self.browser.state().page {
+            Page::Search(query) => query.clone(),
+            _ => String::new(),
+        };
+        self.search
             .update(cx, |field, cx| field.set_value(text, cx));
-        self.failures.clear(&Operation::Library);
     }
 
     fn navigate(&mut self, page: Page, remember: bool, cx: &mut Context<Self>) {
@@ -503,8 +535,10 @@ impl PlayerView {
     }
 
     fn navigation_changed(&mut self, cx: &mut Context<Self>) {
-        self.settings
-            .update(|value| value.last_section = self.browser.state().page.section());
+        if !matches!(self.browser.state().page, Page::Search(_)) {
+            self.settings
+                .update(|value| value.last_section = self.browser.state().page.section());
+        }
         self.reset_navigation_ui(cx);
         if !self.browser.state().loaded {
             if self.demo {
@@ -774,6 +808,7 @@ impl PlayerView {
         slot: &'static str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let liked = self.likes.read(cx).state().is_liked(song);
         let pending = self.likes.read(cx).state().is_pending(&song.id);
         let song = song.clone();
@@ -794,10 +829,10 @@ impl PlayerView {
             .rounded_full()
             .when(pending, |view| view.opacity(0.5))
             .when(!pending, |view| view.cursor_pointer())
-            .hover(|s| s.bg(rgb(HOVER)))
+            .hover(move |s| s.bg(rgb(colors.hover)))
             .child(icon(
                 if liked { "heart-filled" } else { "heart" },
-                if liked { LIKED } else { MUTED },
+                if liked { colors.liked } else { colors.muted },
             ))
             .tooltip(move |_, cx| cx.new(|_| Hint::new(label)).into())
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -887,6 +922,7 @@ impl PlayerView {
             Page::Artists | Page::Albums | Page::Songs | Page::Liked => {
                 self.browser.state().page.section().info().label.into()
             }
+            Page::Search(_) => "Search results".into(),
             Page::Artist(artist) => artist.name.clone(),
             Page::Album(album) => album.name.clone(),
             Page::Folder(path) => {
@@ -952,7 +988,10 @@ impl PlayerView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let editing = self.filter.focus_handle(cx).is_focused(window);
+        if self.theme_menu.is_some() {
+            return;
+        }
+        let editing = self.search.focus_handle(cx).is_focused(window);
         let Some(command) = self.keys.command_in_context(&event.keystroke, editing) else {
             return;
         };
@@ -966,7 +1005,7 @@ impl PlayerView {
                     | Command::Section(_)
                     | Command::Cycle(_)
                     | Command::ToggleSidebar
-                    | Command::Find
+                    | Command::FocusSearch
                     | Command::Toggle
                     | Command::Shuffle
                     | Command::Next
@@ -1028,16 +1067,15 @@ impl PlayerView {
                 self.browser
                     .set_cursor(moved_cursor(self.browser.state().cursor, delta, count));
             }
-            Find => {
+            FocusSearch => {
                 self.show_help = false;
-                window.focus(&self.filter.focus_handle(cx));
+                window.focus(&self.search.focus_handle(cx));
             }
             Escape => {
                 if self.show_help {
                     self.show_help = false;
-                } else if !self.browser.state().query.is_empty() {
-                    self.filter.update(cx, |input, cx| input.clear(cx));
-                    self.browser.set_query(String::new());
+                } else if matches!(self.browser.state().page, Page::Search(_)) {
+                    self.back(cx);
                 } else {
                     self.failures = Failures::default();
                     self.collections
@@ -1103,70 +1141,17 @@ impl PlayerView {
             .update(|value| value.sidebar_compact = !value.sidebar_compact);
         cx.notify();
     }
-
-    fn load_demo_page(&mut self, cx: &gpui::App) {
-        self.browser.invalidate_requests();
-        let mut data = match self.browser.state().page.clone() {
-            Page::Artists => LibraryData::Artists(demo_artists()),
-            Page::Albums => LibraryData::Albums(demo_albums()),
-            Page::Artist(artist) => LibraryData::Albums(
-                demo_albums()
-                    .into_iter()
-                    .filter(|album| album.artist == artist.name)
-                    .collect(),
-            ),
-            Page::Songs => LibraryData::Songs(
-                demo_albums()
-                    .into_iter()
-                    .flat_map(|album| album.song)
-                    .collect(),
-            ),
-            Page::Liked => LibraryData::Songs(
-                self.likes.read(cx).state().merge_liked(
-                    demo_albums()
-                        .into_iter()
-                        .flat_map(|album| album.song)
-                        .filter(|song| song.starred.is_some())
-                        .collect(),
-                ),
-            ),
-            Page::Album(album) => LibraryData::Album(
-                demo_albums()
-                    .into_iter()
-                    .find(|candidate| candidate.id == album.id)
-                    .unwrap_or(album),
-            ),
-            Page::Folder(_) => {
-                if self.browser.use_cached_folders() {
-                    return;
-                }
-                let songs = demo_albums()
-                    .into_iter()
-                    .flat_map(|album| {
-                        album.song.into_iter().map(move |mut song| {
-                            song.path = Some(format!(
-                                "/music/{}/{} - {}.flac",
-                                album.name, song.track, song.title
-                            ));
-                            song
-                        })
-                    })
-                    .collect();
-                LibraryData::Folders(FolderLibrary::from_songs(songs).expect("valid demo paths"))
-            }
-        };
-        if let LibraryData::Albums(albums) = &mut data {
-            crate::models::sort_albums(albums);
-        }
-        self.browser.apply(data, false);
-    }
 }
 
 impl Render for PlayerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         #[cfg(feature = "ui-tests")]
         {
-            *self.ui_probe.borrow_mut() = ui_tests::RenderProbe::default();
+            *self.ui_probe.borrow_mut() = ui_tests::RenderProbe {
+                theme_bg: colors.bg,
+                ..Default::default()
+            };
         }
         // Retain subscriptions for the lifetime of the view.
         let _ = &self.subscriptions;
@@ -1174,33 +1159,45 @@ impl Render for PlayerView {
         let mut root = div()
             .relative()
             .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .text_size(px(14.))
+            .bg(rgb(colors.bg))
+            .text_color(rgb(colors.text))
+            .text_size(px(TEXT_BODY))
             .font_family("Source Sans 3")
             .flex()
-            .flex_col();
+            .flex_col()
+            .track_focus(&self.library_focus)
+            .on_key_down(cx.listener(Self::theme_menu_key_down));
         if let Some(warning) = self.settings.warning() {
             root = root.child(
                 div()
                     .flex_shrink_0()
                     .px_4()
                     .py_2()
-                    .bg(rgb(ERROR_BG))
-                    .text_color(rgb(ERROR_TEXT))
-                    .text_sm()
+                    .bg(rgb(colors.error_bg))
+                    .text_color(rgb(colors.error_text))
+                    .text_size(px(TEXT_SECONDARY))
                     .child(warning.to_owned()),
             );
         }
         if !connected {
-            return root.child(self.connection_screen(cx));
+            return root
+                .child(self.connection_screen(cx))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(16.))
+                        .right(px(16.))
+                        .child(self.theme_toggle(cx)),
+                )
+                .when(self.theme_menu.is_some(), |root| {
+                    root.child(self.theme_overlay(false, cx))
+                });
         }
         if self.focus_library {
             window.focus(&self.library_focus);
             self.focus_library = false;
         }
         root = root
-            .track_focus(&self.library_focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .on_mouse_down(
@@ -1211,14 +1208,17 @@ impl Render for PlayerView {
                     cx.notify();
                 }),
             );
-        let content = if self.browser.is_loading() && !self.browser.state().more {
-            empty_state("Loading your library…", "")
+        let content = if matches!(self.browser.state().page, Page::Search(_)) {
+            self.search_results(cx)
+        } else if self.browser.is_loading() && !self.browser.state().more {
+            empty_state(colors, "Loading your library…")
         } else {
             match self.browser.state().page {
                 Page::Artists => self.artists_list(cx),
                 Page::Albums | Page::Artist(_) => self.albums_list(cx),
                 Page::Songs | Page::Liked | Page::Album(_) => self.songs_list(cx),
                 Page::Folder(_) => self.folder_columns(cx),
+                Page::Search(_) => unreachable!(),
             }
         };
         let main = div()
@@ -1256,109 +1256,17 @@ impl Render for PlayerView {
                         view.child(self.help_overlay(window, cx))
                     }),
             )
-            .child(self.player_bar(cx));
+            .child(self.player_bar(cx))
+            .when(self.theme_menu.is_some(), |root| {
+                root.child(self.theme_overlay(true, cx))
+            });
         #[cfg(feature = "ui-tests")]
         {
             root = root.when_some(
-                ui_tests::demo_overlay(self.demo_hint.as_ref()),
+                ui_tests::demo_overlay(colors, self.demo_hint.as_ref()),
                 |root, overlay| root.child(overlay),
             );
         }
         root
     }
-}
-
-fn count_label(count: usize, noun: &str) -> String {
-    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
-}
-
-fn empty_state(message: &str, query: &str) -> gpui::AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .text_color(rgb(MUTED))
-        .child(
-            svg()
-                .path("songs")
-                .size(px(32.))
-                .text_color(rgb(ARTWORK_ICON)),
-        )
-        .child(if query.is_empty() {
-            message.to_owned()
-        } else {
-            "No matches in the loaded list".into()
-        })
-        .into_any_element()
-}
-
-fn demo_artists() -> Vec<Artist> {
-    [
-        ("1", "Nils Frahm", 3),
-        ("2", "Ólafur Arnalds", 2),
-        ("3", "Hania Rani", 2),
-        ("4", "Ryuichi Sakamoto", 2),
-        ("5", "Max Richter", 1),
-    ]
-    .into_iter()
-    .map(|(id, name, album_count)| Artist {
-        id: id.into(),
-        name: name.into(),
-        album_count,
-    })
-    .collect()
-}
-
-fn demo_albums() -> Vec<Album> {
-    [
-        ("Spaces", "Nils Frahm", 2013),
-        ("All Melody", "Nils Frahm", 2018),
-        ("Music for Animals", "Nils Frahm", 2022),
-        ("re:member", "Ólafur Arnalds", 2018),
-        ("some kind of peace", "Ólafur Arnalds", 2020),
-        ("Esja", "Hania Rani", 2019),
-        ("Ghosts", "Hania Rani", 2023),
-        ("async", "Ryuichi Sakamoto", 2017),
-        ("12", "Ryuichi Sakamoto", 2023),
-        ("The Blue Notebooks", "Max Richter", 2004),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(index, (name, artist, year))| {
-        let songs = [
-            "Opening",
-            "A quiet morning",
-            "Drift",
-            "Somewhere",
-            "Still here",
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(track, title)| Song {
-            id: format!("demo-{index}-{track}"),
-            title: title.into(),
-            artist: artist.into(),
-            album: name.into(),
-            duration: 180 + track as u64 * 23,
-            track: track as u32 + 1,
-            disc_number: 1,
-            cover_art: None,
-            path: None,
-            starred: (index == 0 && track < 2).then(|| "2026-10-15T12:00:00Z".into()),
-        })
-        .collect();
-        Album {
-            id: format!("demo-{index}"),
-            name: name.into(),
-            artist: artist.into(),
-            year: Some(year),
-            song_count: 5,
-            cover_art: None,
-            song: songs,
-        }
-    })
-    .collect()
 }

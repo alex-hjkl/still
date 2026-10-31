@@ -130,10 +130,14 @@ pub const PAGE: Shortcut = Shortcut::new("Ctrl+F / B", "Page down / up").binding
     Binding::key("pagedown", PageDown),
     Binding::key("pageup", PageUp),
 ]);
-pub const FIND: Shortcut = Shortcut::new("/ · ⌘F", "Find in loaded list")
+pub const FIND: Shortcut = Shortcut::new("/ · ⌘F", "Search library")
     .footer("/")
-    .bindings(&[Binding::key("/", Find), Binding::key("f", Find).platform()]);
-pub const FINISH_FIND: Shortcut = Shortcut::new("Enter / Esc", "Return to list; Esc again clears");
+    .bindings(&[
+        Binding::key("/", FocusSearch),
+        Binding::key("f", FocusSearch).platform(),
+    ]);
+pub const FINISH_FIND: Shortcut =
+    Shortcut::new("Enter / Esc", "Return to results; Esc again goes back");
 pub const ESCAPE: Shortcut =
     Shortcut::new("Esc", "Close").bindings(&[Binding::key("escape", Escape).any_shift()]);
 pub const TOGGLE: Shortcut = Shortcut::new("Space", "Play / pause")
@@ -263,7 +267,10 @@ pub fn footer_hints(page: &crate::browser::Page) -> Vec<(&'static str, &'static 
             LIKE.footer_hint("Unlike"),
         ]),
         Page::Songs => hints.extend([OPEN.footer_hint("Play"), LIKE.footer_hint("Like")]),
+        Page::Search(_) => {
+            hints.extend([OPEN.footer_hint("Open / play"), ESCAPE.footer_hint("Back")])
+        }
     }
-    hints.push(FIND.footer_hint("Find"));
+    hints.push(FIND.footer_hint("Search"));
     hints
 }

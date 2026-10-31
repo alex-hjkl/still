@@ -1,8 +1,5 @@
 //! A reusable slider. Pointer state belongs to the control, not the application view.
-use crate::{
-    models::time_label,
-    theme::{ACCENT, BORDER, ON_ACCENT, TEXT},
-};
+use crate::models::time_label;
 use gpui::{
     Context, DispatchPhase, EventEmitter, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Render, Window, div, prelude::*, px, relative, rgb,
@@ -126,6 +123,7 @@ impl Slider {
 
 impl Render for Slider {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         let value = self.pointer.drag.unwrap_or(self.value);
         let hint = self.pointer.drag.or(self.pointer.hover);
         let thumb = self.enabled && (self.mode == CommitMode::Continuous || hint.is_some());
@@ -146,13 +144,13 @@ impl Render for Slider {
                             gpui::point(bounds.left(), bounds.top() + px(7.)),
                             gpui::size(bounds.size.width, px(3.)),
                         );
-                        window.paint_quad(gpui::fill(track, rgb(BORDER)));
+                        window.paint_quad(gpui::fill(track, rgb(colors.border)));
                         window.paint_quad(gpui::fill(
                             gpui::Bounds::new(
                                 track.origin,
                                 gpui::size(track.size.width * value, px(3.)),
                             ),
-                            rgb(ACCENT),
+                            rgb(colors.accent),
                         ));
                         let ratio = move |point: gpui::Point<gpui::Pixels>| {
                             (f32::from(point.x - bounds.left())
@@ -206,7 +204,7 @@ impl Render for Slider {
                         .top(px(5.))
                         .size(px(8.))
                         .rounded_full()
-                        .bg(rgb(ACCENT)),
+                        .bg(rgb(colors.accent)),
                 )
             })
             .when_some(
@@ -221,8 +219,8 @@ impl Render for Slider {
                             .w(px(56.))
                             .py_1()
                             .rounded_md()
-                            .bg(rgb(TEXT))
-                            .text_color(rgb(ON_ACCENT))
+                            .bg(rgb(colors.tooltip_bg))
+                            .text_color(rgb(colors.tooltip_text))
                             .text_xs()
                             .text_center()
                             .child(time_label((duration as f32 * ratio).round() as u64)),

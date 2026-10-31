@@ -2,7 +2,31 @@ use super::*;
 
 impl PlayerView {
     pub(super) fn header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut subtitle = match &self.browser.state().page {
+        let colors = crate::theme::colors(cx);
+        let subtitle = match &self.browser.state().page {
+            Page::Search(_) => {
+                if self
+                    .failures
+                    .iter()
+                    .any(|(operation, _)| *operation == Operation::Library)
+                {
+                    "Search unavailable".into()
+                } else if self.browser.is_loading() || !self.browser.state().loaded {
+                    "Searching your library…".into()
+                } else {
+                    format!(
+                        "{} · {} · {}{}",
+                        count_label(self.browser.state().artists.len(), "artist"),
+                        count_label(self.browser.state().albums.len(), "album"),
+                        count_label(self.browser.state().songs.len(), "song"),
+                        if self.browser.state().more {
+                            " · more available"
+                        } else {
+                            ""
+                        }
+                    )
+                }
+            }
             Page::Artists => count_label(self.browser.state().artists.len(), "artist"),
             Page::Albums => format!(
                 "{}{}",
@@ -46,29 +70,9 @@ impl PlayerView {
                 })
                 .unwrap_or_default(),
         };
-        if !self.browser.state().query.is_empty() {
-            let state = self.browser.state();
-            let (total, noun) = match &state.page {
-                Page::Artists => (state.artists.len(), "artists"),
-                Page::Albums | Page::Artist(_) => (state.albums.len(), "albums"),
-                Page::Folder(path) => (
-                    self.browser
-                        .folder_library()
-                        .and_then(|library| library.folder(path))
-                        .map_or(0, |folder| folder.children.len() + folder.songs.len()),
-                    "items",
-                ),
-                _ => (state.songs.len(), "songs"),
-            };
-            subtitle = format!(
-                "{} of {total} loaded {noun}{}",
-                self.visible_entries().len(),
-                if state.more { " · more available" } else { "" }
-            );
-        }
         #[cfg(feature = "ui-tests")]
         {
-            self.ui_probe.borrow_mut().find_summary = subtitle.clone();
+            self.ui_probe.borrow_mut().search_summary = subtitle.clone();
         }
         let title = match &self.browser.state().page {
             Page::Folder(path) if path.is_empty() => Section::Folders.info().label.to_owned(),
@@ -86,6 +90,19 @@ impl PlayerView {
             }
             _ => self.title(),
         };
+        let stacked = f32::from(window.viewport_size().width) - self.sidebar_width() < 700.;
+        #[cfg(feature = "ui-tests")]
+        {
+            self.ui_probe.borrow_mut().header_stacked = stacked;
+        }
+        let search = || {
+            div()
+                .id("library-search")
+                .min_w_0()
+                .when(stacked, |view| view.w_full())
+                .when(!stacked, |view| view.w(px(220.)).flex_shrink_0())
+                .child(self.search.clone())
+        };
         div()
             .flex_shrink_0()
             .flex()
@@ -94,16 +111,18 @@ impl PlayerView {
             .py_3()
             .gap_2()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors.border))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
                     .child(self.sidebar_toggle(window, cx))
+                    .child(self.theme_toggle(cx))
                     .when(self.browser.has_history(), |view| {
                         view.child(
                             toolbar_icon(
+                                colors,
                                 "back",
                                 "back",
                                 shortcuts::BACK.hint(shortcuts::BACK.label),
@@ -120,18 +139,22 @@ impl PlayerView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_size(px(19.))
+                                    .text_size(px(21.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(title),
                             )
-                            .child(div().text_xs().text_color(rgb(MUTED)).truncate().child(
-                                if self.browser.is_loading() {
-                                    "Loading…".into()
-                                } else {
-                                    subtitle
-                                },
-                            )),
+                            .child(
+                                div()
+                                    .text_size(px(TEXT_CAPTION))
+                                    .text_color(rgb(colors.muted))
+                                    .truncate()
+                                    .child(if self.browser.is_loading() {
+                                        "Loading…".into()
+                                    } else {
+                                        subtitle
+                                    }),
+                            ),
                     )
                     .when(
                         matches!(self.browser.state().page, Page::Folder(_))
@@ -139,6 +162,7 @@ impl PlayerView {
                         |view| {
                             view.child(
                                 toolbar_icon(
+                                    colors,
                                     "refresh-folders",
                                     "refresh",
                                     shortcuts::REFRESH.hint("Refresh folders"),
@@ -166,6 +190,7 @@ impl PlayerView {
                         |view| {
                             view.child(
                                 toolbar_icon(
+                                    colors,
                                     "play-page",
                                     "play",
                                     match self.browser.state().page {
@@ -179,7 +204,7 @@ impl PlayerView {
                                         _ => shortcuts::PLAY_SELECTION.hint("Play album"),
                                     },
                                 )
-                                .bg(rgb(SELECTED))
+                                .bg(rgb(colors.selected))
                                 .on_click(cx.listener(
                                     |this, _, _, cx| match &this.browser.state().page {
                                         Page::Folder(path) => this.play_folder(&path.clone(), cx),
@@ -193,25 +218,17 @@ impl PlayerView {
                             )
                         },
                     )
-                    .child(
-                        div()
-                            .id("find-in-list")
-                            .w(px(220.))
-                            .flex_shrink_0()
-                            .tooltip(|_, cx| {
-                                cx.new(|_| Hint::new(shortcuts::FIND.hint("Find in loaded items")))
-                                    .into()
-                            })
-                            .child(self.filter.clone()),
-                    ),
+                    .when(!stacked, |row| row.child(search())),
             )
+            .when(stacked, |header| header.child(search()))
             .into_any_element()
     }
 
     pub(super) fn artists_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
-            return empty_state("No artists yet", &self.browser.state().query);
+            return empty_state(colors, "No artists yet");
         }
         uniform_list(
             ("artists", self.browser.request_id() as usize),
@@ -230,19 +247,19 @@ impl PlayerView {
                             .unwrap_or('♪')
                             .to_uppercase()
                             .to_string();
-                        track_row(row, ARTIST_ROW_HEIGHT)
+                        track_row(colors, row, ARTIST_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
+                                view.bg(rgb(colors.selected))
                                     .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
+                                    .border_color(rgb(colors.keyboard_focus))
                             })
                             .child(
                                 div()
                                     .size(px(34.))
                                     .flex_shrink_0()
                                     .rounded_full()
-                                    .bg(rgb(SELECTED))
-                                    .text_color(rgb(ACCENT))
+                                    .bg(rgb(colors.selected))
+                                    .text_color(rgb(colors.accent))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -258,13 +275,14 @@ impl PlayerView {
                             )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(colors.muted))
                                     .child(count_label(artist.album_count, "album")),
                             )
                             .child({
                                 let artist = artist.clone();
                                 row_play_button(
+                                    colors,
                                     format!("play-artist-{}", artist.id).into(),
                                     shortcuts::PLAY_SELECTION.hint("Play artist"),
                                 )
@@ -280,7 +298,7 @@ impl PlayerView {
                                     },
                                 ))
                             })
-                            .child(icon_sized("forward", MUTED, 16.))
+                            .child(icon_sized("forward", colors.muted, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);
                                 this.navigate(Page::Artist(artist.clone()), true, cx)
@@ -297,9 +315,10 @@ impl PlayerView {
     }
 
     pub(super) fn albums_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
-            return empty_state("No albums yet", &self.browser.state().query);
+            return empty_state(colors, "No albums yet");
         }
         uniform_list(
             ("albums", self.browser.request_id() as usize),
@@ -311,13 +330,14 @@ impl PlayerView {
                             unreachable!()
                         };
                         let album = this.browser.state().albums[*index].clone();
-                        track_row(row, ALBUM_ROW_HEIGHT)
+                        track_row(colors, row, ALBUM_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
+                                view.bg(rgb(colors.selected))
                                     .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
+                                    .border_color(rgb(colors.keyboard_focus))
                             })
                             .child(artwork(
+                                colors,
                                 this.connection.read(cx).client.as_ref(),
                                 album.cover_art.as_deref(),
                                 44.,
@@ -332,8 +352,8 @@ impl PlayerView {
                                     .child(div().truncate().child(album.name.clone()))
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
+                                            .text_size(px(TEXT_SECONDARY))
+                                            .text_color(rgb(colors.muted))
                                             .truncate()
                                             .child(album.artist.clone()),
                                     ),
@@ -342,21 +362,24 @@ impl PlayerView {
                                 view.child(
                                     div()
                                         .w(px(48.))
-                                        .text_sm()
-                                        .text_color(rgb(MUTED))
+                                        .flex_shrink_0()
+                                        .text_size(px(TEXT_SECONDARY))
+                                        .text_color(rgb(colors.muted))
                                         .child(year.to_string()),
                                 )
                             })
                             .child(
                                 div()
                                     .w(px(86.))
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
+                                    .flex_shrink_0()
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(colors.muted))
                                     .child(count_label(album.song_count, "song")),
                             )
                             .child({
                                 let album = album.clone();
                                 row_play_button(
+                                    colors,
                                     format!("play-album-{}", album.id).into(),
                                     shortcuts::PLAY_SELECTION.hint("Play album"),
                                 )
@@ -369,7 +392,7 @@ impl PlayerView {
                                     },
                                 ))
                             })
-                            .child(icon_sized("forward", MUTED, 16.))
+                            .child(icon_sized("forward", colors.muted, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.browser.set_cursor(row);
                                 this.navigate(Page::Album(album.clone()), true, cx)
@@ -386,15 +409,16 @@ impl PlayerView {
     }
 
     pub(super) fn songs_list(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
             return empty_state(
+                colors,
                 if matches!(self.browser.state().page, Page::Liked) {
                     "Click ♡ next to a song to add it here"
                 } else {
                     "No songs yet"
                 },
-                &self.browser.state().query,
             );
         }
         let list = uniform_list(
@@ -409,17 +433,22 @@ impl PlayerView {
                             .queue()
                             .current()
                             .is_some_and(|current| current.id == song.id);
-                        track_row(row, SONG_ROW_HEIGHT)
+                        track_row(colors, row, SONG_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
-                                view.bg(rgb(SELECTED))
+                                view.bg(rgb(colors.selected))
                                     .border_1()
-                                    .border_color(rgb(KEYBOARD_FOCUS))
+                                    .border_color(rgb(colors.keyboard_focus))
                             })
                             .child(
                                 div()
                                     .w(px(24.))
-                                    .text_sm()
-                                    .text_color(rgb(if active { ACCENT } else { MUTED }))
+                                    .flex_shrink_0()
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(if active {
+                                        colors.accent
+                                    } else {
+                                        colors.muted
+                                    }))
                                     .child(if active {
                                         icon_sized(
                                             if this.transport.state().is_playing() {
@@ -427,7 +456,7 @@ impl PlayerView {
                                             } else {
                                                 "pause"
                                             },
-                                            ACCENT,
+                                            colors.accent,
                                             14.,
                                         )
                                         .into_any_element()
@@ -444,7 +473,11 @@ impl PlayerView {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .text_color(rgb(if active { ACCENT } else { TEXT }))
+                                            .text_color(rgb(if active {
+                                                colors.accent
+                                            } else {
+                                                colors.text
+                                            }))
                                             .font_weight(if active {
                                                 gpui::FontWeight::SEMIBOLD
                                             } else {
@@ -458,8 +491,8 @@ impl PlayerView {
                                             div()
                                                 .flex_1()
                                                 .min_w_0()
-                                                .text_sm()
-                                                .text_color(rgb(MUTED))
+                                                .text_size(px(TEXT_SECONDARY))
+                                                .text_color(rgb(colors.muted))
                                                 .truncate()
                                                 .child(song.artist.clone()),
                                         ),
@@ -471,8 +504,8 @@ impl PlayerView {
                                     view.child(
                                         div()
                                             .w(relative(0.3))
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
+                                            .text_size(px(TEXT_SECONDARY))
+                                            .text_color(rgb(colors.muted))
                                             .truncate()
                                             .child(song.album.clone()),
                                     )
@@ -482,8 +515,9 @@ impl PlayerView {
                             .child(
                                 div()
                                     .w(px(60.))
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
+                                    .flex_shrink_0()
+                                    .text_size(px(TEXT_SECONDARY))
+                                    .text_color(rgb(colors.muted))
                                     .child(time_label(song.duration)),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -514,10 +548,10 @@ impl PlayerView {
                     .mt_2()
                     .mb_1()
                     .rounded_md()
-                    .bg(rgb(PANEL))
-                    .text_xs()
+                    .bg(rgb(colors.panel))
+                    .text_size(px(TEXT_CAPTION))
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors.muted))
                     .child(div().w(px(24.)).child("#"))
                     .child(div().flex_1().min_w_0().child("Title"))
                     .when(

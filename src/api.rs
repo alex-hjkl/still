@@ -1,5 +1,5 @@
 use crate::{
-    models::{Album, Artist, PAGE_SIZE, Song, sort_albums},
+    models::{Album, Artist, PAGE_SIZE, SearchResults, Song, sort_albums},
     requests::Cancellation,
 };
 use anyhow::{Context, Result, bail};
@@ -38,7 +38,7 @@ struct ApiResponse {
     artist: Option<Albums>,
     album: Option<Album>,
     album_list2: Option<Albums>,
-    search_result3: Option<Songs>,
+    search_result3: Option<SearchResults>,
     starred2: Option<Songs>,
 }
 
@@ -239,8 +239,28 @@ impl Navidrome {
         Ok(body
             .search_result3
             .context("Missing searchResult3 in the Navidrome response")?
-            .song
-            .unwrap_or_default())
+            .songs)
+    }
+
+    pub fn search(&self, query: &str, offset: usize) -> Result<SearchResults> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(SearchResults::default());
+        }
+        self.request(
+            "search3",
+            &[
+                ("query", query.into()),
+                ("artistCount", PAGE_SIZE.to_string()),
+                ("albumCount", PAGE_SIZE.to_string()),
+                ("songCount", PAGE_SIZE.to_string()),
+                ("artistOffset", offset.to_string()),
+                ("albumOffset", offset.to_string()),
+                ("songOffset", offset.to_string()),
+            ],
+        )?
+        .search_result3
+        .context("Missing searchResult3 in the Navidrome response")
     }
 
     pub fn folder_library(
@@ -372,18 +392,21 @@ mod tests {
         let empty =
             decode_fixture(json!({"subsonic-response": {"status":"ok", "searchResult3":{}}}))
                 .unwrap();
-        assert!(
-            empty
-                .search_result3
-                .unwrap()
-                .song
-                .unwrap_or_default()
-                .is_empty()
-        );
+        assert!(empty.search_result3.unwrap().songs.is_empty());
+        let empty = decode_fixture(json!({"subsonic-response": {
+            "status":"ok", "searchResult3":{"artist":null, "album":null, "song":null}
+        }}))
+        .unwrap()
+        .search_result3
+        .unwrap();
+        assert!(empty.artists.is_empty() && empty.albums.is_empty() && empty.songs.is_empty());
         let song: Song =
             serde_json::from_value(json!({"id":"opaque-id", "title":"Песня"})).unwrap();
         assert_eq!(song.duration, 0);
         assert_eq!(time_label(125), "2:05");
+        let client = Navidrome::new("http://127.0.0.1:9", "user", "pass").unwrap();
+        let empty = client.search(" \t ", 0).unwrap();
+        assert!(empty.artists.is_empty() && empty.albums.is_empty() && empty.songs.is_empty());
     }
 
     #[test]
@@ -558,6 +581,23 @@ mod tests {
                 json!({"searchResult3":{"song":[{"id":"song-id", "title":"Song"}]}}),
             ),
             (
+                "search3",
+                vec![
+                    ("query", "Музыка & piano"),
+                    ("artistCount", "200"),
+                    ("albumCount", "200"),
+                    ("songCount", "200"),
+                    ("artistOffset", "200"),
+                    ("albumOffset", "200"),
+                    ("songOffset", "200"),
+                ],
+                json!({"searchResult3":{
+                    "artist":[{"id":"artist-found", "name":"Artist"}],
+                    "album":[{"id":"album-found", "name":"Album"}],
+                    "song":[{"id":"song-found", "title":"Song"}]
+                }}),
+            ),
+            (
                 "getStarred2",
                 vec![],
                 json!({"starred2":{"song":[
@@ -624,6 +664,10 @@ mod tests {
         );
         assert_eq!(client.albums(200).unwrap()[0].id, "page-2");
         assert_eq!(client.songs(200).unwrap()[0].id, "song-id");
+        let found = client.search("  Музыка & piano  ", 200).unwrap();
+        assert_eq!(found.artists[0].id, "artist-found");
+        assert_eq!(found.albums[0].id, "album-found");
+        assert_eq!(found.songs[0].id, "song-found");
         let liked = client.liked_songs().unwrap();
         assert_eq!(liked.len(), 1);
         assert!(liked[0].starred.is_some());

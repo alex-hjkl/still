@@ -15,7 +15,7 @@ pub enum Command {
     HalfUp,
     PageDown,
     PageUp,
-    Find,
+    FocusSearch,
     Escape,
     Toggle,
     Shuffle,
@@ -38,7 +38,7 @@ impl Command {
     fn available_while_editing(self) -> bool {
         matches!(
             self,
-            Self::Escape | Self::Find | Self::ToggleSidebar | Self::Section(_)
+            Self::Escape | Self::FocusSearch | Self::ToggleSidebar | Self::Section(_)
         )
     }
 }
@@ -136,7 +136,7 @@ mod tests {
             ("pageup", Command::PageUp),
             ("home", Command::First),
             ("end", Command::Last),
-            ("cmd-f", Command::Find),
+            ("cmd-f", Command::FocusSearch),
         ] {
             assert_eq!(keys.command(&key(stroke)), Some(expected));
         }
@@ -191,7 +191,7 @@ mod tests {
         );
         assert_eq!(
             keys.command_in_context(&key("cmd-f"), true),
-            Some(Command::Find)
+            Some(Command::FocusSearch)
         );
         assert_eq!(
             keys.command_in_context(&key("f"), false),
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_shortcut_works_in_filter_without_stealing_typing_or_page_up() {
+    fn sidebar_shortcut_works_in_search_without_stealing_typing_or_page_up() {
         for editing in [false, true] {
             let mut keys = Keys::default();
             assert_eq!(
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn command_numbers_switch_sections_even_while_editing_the_filter() {
+    fn command_numbers_switch_sections_even_while_editing_search() {
         for editing in [false, true] {
             let mut keys = Keys::default();
             for number in 1..=5 {

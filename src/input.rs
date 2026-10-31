@@ -2,7 +2,7 @@
 // See licenses/GPUI-APACHE-2.0.txt. Native input handling preserves Unicode and IME support.
 use std::ops::Range;
 
-use crate::theme::{ACCENT, INPUT_BG, INPUT_BORDER, MUTED, PLACEHOLDER, SELECTION, TEXT};
+use crate::theme::TEXT_BODY;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
@@ -556,6 +556,7 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let colors = crate::theme::colors(cx);
         let input = self.input.read(cx);
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
@@ -563,7 +564,7 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), rgb(PLACEHOLDER).into())
+            (input.placeholder.clone(), rgb(colors.placeholder).into())
         } else {
             (
                 if input.secret {
@@ -624,7 +625,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    rgb(ACCENT),
+                    rgb(colors.accent),
                 )),
             )
         } else {
@@ -640,7 +641,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(SELECTION),
+                    rgba(colors.selection),
                 )),
                 None,
             )
@@ -690,6 +691,7 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = crate::theme::colors(cx);
         div()
             .relative()
             .flex()
@@ -716,16 +718,16 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(rgb(INPUT_BG))
-            .text_color(rgb(TEXT))
+            .bg(rgb(colors.input_bg))
+            .text_color(rgb(colors.text))
             .border_1()
-            .border_color(rgb(INPUT_BORDER))
+            .border_color(rgb(colors.input_border))
             .when(self.focus_handle.is_focused(window), |style| {
-                style.border_color(rgb(ACCENT))
+                style.border_color(rgb(colors.accent))
             })
             .rounded_md()
             .line_height(px(24.))
-            .text_size(px(14.))
+            .text_size(px(TEXT_BODY))
             .child(
                 div()
                     .h(px(42.))
@@ -748,7 +750,7 @@ impl Render for TextInput {
                         .items_center()
                         .justify_center()
                         .rounded_md()
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors.muted))
                         .cursor_pointer()
                         .child("×")
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
