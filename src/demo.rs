@@ -1,81 +1,78 @@
-use super::{Album, Artist, FolderLibrary, LibraryData, Page, PlayerView, Song};
+use crate::{
+    browser::{LibraryData, Page},
+    folders::FolderLibrary,
+    models::{Album, Artist, Song},
+};
 
-impl PlayerView {
-    pub(super) fn load_demo_page(&mut self, cx: &gpui::App) {
-        let mut data = match self.browser.state().page.clone() {
-            Page::Search(query) => {
-                let query = query.trim().to_lowercase();
-                let matches = |parts: &[&str]| parts.join(" ").to_lowercase().contains(&query);
-                let albums = demo_albums();
-                LibraryData::Search(crate::models::SearchResults {
-                    artists: demo_artists()
-                        .into_iter()
-                        .filter(|artist| matches(&[&artist.name]))
-                        .collect(),
-                    songs: albums
-                        .iter()
-                        .flat_map(|album| album.song.clone())
-                        .filter(|song| matches(&[&song.title, &song.artist, &song.album]))
-                        .collect(),
-                    albums: albums
-                        .into_iter()
-                        .filter(|album| matches(&[&album.name, &album.artist]))
-                        .collect(),
-                })
-            }
-            Page::Artists => LibraryData::Artists(demo_artists()),
-            Page::Albums => LibraryData::Albums(demo_albums()),
-            Page::Artist(artist) => LibraryData::Albums(
-                demo_albums()
+pub fn load(page: &Page) -> LibraryData {
+    let mut data = match page.clone() {
+        Page::Search(query) => {
+            let query = query.trim().to_lowercase();
+            let matches = |parts: &[&str]| parts.join(" ").to_lowercase().contains(&query);
+            let albums = demo_albums();
+            LibraryData::Search(crate::models::SearchResults {
+                artists: demo_artists()
                     .into_iter()
-                    .filter(|album| album.artist == artist.name)
+                    .filter(|artist| matches(&[&artist.name]))
                     .collect(),
-            ),
-            Page::Songs => LibraryData::Songs(
-                demo_albums()
-                    .into_iter()
-                    .flat_map(|album| album.song)
+                songs: albums
+                    .iter()
+                    .flat_map(|album| album.song.clone())
+                    .filter(|song| matches(&[&song.title, &song.artist, &song.album]))
                     .collect(),
-            ),
-            Page::Liked => LibraryData::Songs(
-                self.likes.read(cx).state().merge_liked(
-                    demo_albums()
-                        .into_iter()
-                        .flat_map(|album| album.song)
-                        .filter(|song| song.starred.is_some())
-                        .collect(),
-                ),
-            ),
-            Page::Album(album) => LibraryData::Album(
-                demo_albums()
+                albums: albums
                     .into_iter()
-                    .find(|candidate| candidate.id == album.id)
-                    .unwrap_or(album),
-            ),
-            Page::Folder(_) => {
-                if self.browser.use_cached_folders() {
-                    return;
-                }
-                let songs = demo_albums()
-                    .into_iter()
-                    .flat_map(|album| {
-                        album.song.into_iter().map(move |mut song| {
-                            song.path = Some(format!(
-                                "/music/{}/{} - {}.flac",
-                                album.name, song.track, song.title
-                            ));
-                            song
-                        })
-                    })
-                    .collect();
-                LibraryData::Folders(FolderLibrary::from_songs(songs).expect("valid demo paths"))
-            }
-        };
-        if let LibraryData::Albums(albums) = &mut data {
-            crate::models::sort_albums(albums);
+                    .filter(|album| matches(&[&album.name, &album.artist]))
+                    .collect(),
+            })
         }
-        self.browser.apply(data, false);
+        Page::Artists => LibraryData::Artists(demo_artists()),
+        Page::Albums => LibraryData::Albums(demo_albums()),
+        Page::Artist(artist) => LibraryData::Albums(
+            demo_albums()
+                .into_iter()
+                .filter(|album| album.artist == artist.name)
+                .collect(),
+        ),
+        Page::Songs => LibraryData::Songs(
+            demo_albums()
+                .into_iter()
+                .flat_map(|album| album.song)
+                .collect(),
+        ),
+        Page::Liked => LibraryData::Songs(
+            demo_albums()
+                .into_iter()
+                .flat_map(|album| album.song)
+                .filter(|song| song.starred.is_some())
+                .collect(),
+        ),
+        Page::Album(album) => LibraryData::Album(
+            demo_albums()
+                .into_iter()
+                .find(|candidate| candidate.id == album.id)
+                .unwrap_or(album),
+        ),
+        Page::Folder(_) => {
+            let songs = demo_albums()
+                .into_iter()
+                .flat_map(|album| {
+                    album.song.into_iter().map(move |mut song| {
+                        song.path = Some(format!(
+                            "/music/{}/{} - {}.flac",
+                            album.name, song.track, song.title
+                        ));
+                        song
+                    })
+                })
+                .collect();
+            LibraryData::Folders(FolderLibrary::from_songs(songs).expect("valid demo paths"))
+        }
+    };
+    if let LibraryData::Albums(albums) = &mut data {
+        crate::models::sort_albums(albums);
     }
+    data
 }
 
 fn demo_artists() -> Vec<Artist> {

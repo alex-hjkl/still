@@ -189,7 +189,7 @@ mod tests {
         browser.navigate(Page::Songs, false);
         browser.apply(LibraryData::Songs(vec![song(0), song(1)]), false);
         browser.set_cursor(1);
-        let cached = browser.state().songs.clone();
+        let cached = browser.state().song_collection().unwrap().clone();
         browser.navigate(Page::Search("slow".into()), true);
         let mut loader = LibraryLoader::default();
         let (request, cancellation) = loader.begin(context(browser.state().page.clone(), 0));
@@ -199,10 +199,13 @@ mod tests {
         assert!(cancellation.check().is_err());
         assert!(!loader.finish(request, Ok(LibraryData::Songs(vec![song(99)]))));
         assert!(loader.take_outcome().is_none());
-        assert!(browser.state().loaded);
-        assert!(Arc::ptr_eq(&cached, &browser.state().songs));
+        assert!(browser.state().loaded());
+        assert!(Arc::ptr_eq(
+            &cached,
+            browser.state().song_collection().unwrap()
+        ));
         assert_eq!(browser.state().cursor, 1);
-        assert_eq!(browser.state().songs[1].id, "song-1");
+        assert_eq!(browser.state().songs()[1].id, "song-1");
     }
 
     #[test]
@@ -265,9 +268,9 @@ mod tests {
             assert_eq!(browser.state().cursor, 175);
             assert!(!browser.state().more);
             if songs {
-                assert_eq!(browser.state().songs[200].id, "last");
+                assert_eq!(browser.state().songs()[200].id, "last");
             } else {
-                assert_eq!(browser.state().albums[200].id, "last");
+                assert_eq!(browser.state().albums()[200].id, "last");
             }
             server.finish();
         }

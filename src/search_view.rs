@@ -7,7 +7,7 @@ impl PlayerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let searching = matches!(self.browser.state().page, Page::Search(_));
+        let searching = matches!(self.library.browser().state().page, Page::Search(_));
         if text.trim().is_empty() {
             if searching {
                 self.back(cx);
@@ -17,29 +17,28 @@ impl PlayerView {
             return;
         }
         if searching {
-            if !self.browser.set_search(text) {
+            if !self.library.set_search(text, cx) {
                 return;
             }
-            self.reset_library_load(cx);
+            self.search_delay = None;
             self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
         } else {
             self.remember_folder(cx);
-            self.pending_folder = None;
-            self.browser.navigate(Page::Search(text), true);
+            self.library.navigate(Page::Search(text), true, cx);
             self.reset_navigation_ui(cx);
             self.focus_library = false;
             window.focus(&self.search.focus_handle(cx));
         }
-        if self.demo {
-            self.load_demo_page(cx);
+        if self.connection.read(cx).session().is_demo() {
+            self.submit_search(cx);
             return;
         }
-        let request_id = self.library_loader.read(cx).request_id();
+        let request_id = self.library.request_id(cx);
         let timer = cx.background_executor().timer(Duration::from_millis(250));
         self.search_delay = Some(cx.spawn(async move |this, cx| {
             timer.await;
             let _ = this.update(cx, |this, cx| {
-                if this.library_loader.read(cx).request_id() == request_id {
+                if this.library.request_id(cx) == request_id {
                     this.submit_search(cx);
                 }
             });
@@ -47,12 +46,16 @@ impl PlayerView {
     }
 
     pub(super) fn submit_search(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.browser.state().page, Page::Search(_))
-            && !self.browser.state().loaded
-            && !self.library_loader.read(cx).is_loading()
+        if matches!(self.library.browser().state().page, Page::Search(_))
+            && !self.library.browser().state().loaded()
+            && !self.library.is_loading(cx)
         {
             self.search_delay = None;
-            self.load(self.browser.request(), cx);
+            let context = self.library_context(cx);
+            if let Some(outcome) = self.library.load_current(context, cx) {
+                self.accept_library(outcome, cx);
+            }
+            cx.notify();
         }
     }
 
@@ -60,13 +63,9 @@ impl PlayerView {
         let colors = crate::theme::colors(cx);
         let entries = self.visible_entries();
         if entries.is_empty() {
-            let message = if self
-                .failures
-                .iter()
-                .any(|(operation, _)| *operation == Operation::Library)
-            {
+            let message = if self.library.failure().is_some() {
                 "Could not search your library"
-            } else if !self.browser.state().loaded {
+            } else if !self.library.browser().state().loaded() {
                 "Searching your library…"
             } else {
                 "No matches in your library"
@@ -74,10 +73,7 @@ impl PlayerView {
             return empty_state(colors, message);
         }
         uniform_list(
-            (
-                "search-results",
-                self.library_loader.read(cx).request_id() as usize,
-            ),
+            ("search-results", self.library.request_id(cx) as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -85,7 +81,7 @@ impl PlayerView {
                         let entry = entries[row].clone();
                         let (glyph, kind, title, detail, cover) = match &entry {
                             BrowserEntry::Artist(index) => {
-                                let artist = &this.browser.state().artists[*index];
+                                let artist = &this.library.browser().state().artists()[*index];
                                 (
                                     "artists",
                                     "Artist",
@@ -95,7 +91,7 @@ impl PlayerView {
                                 )
                             }
                             BrowserEntry::Album(index) => {
-                                let album = &this.browser.state().albums[*index];
+                                let album = &this.library.browser().state().albums()[*index];
                                 (
                                     "albums",
                                     "Album",
@@ -105,7 +101,7 @@ impl PlayerView {
                                 )
                             }
                             BrowserEntry::Song(index) => {
-                                let song = &this.browser.state().songs[*index];
+                                let song = &this.library.browser().state().songs()[*index];
                                 (
                                     "songs",
                                     "Song",
@@ -134,12 +130,7 @@ impl PlayerView {
                                     .border_color(rgb(colors.keyboard_focus))
                             })
                             .child(if cover.is_some() {
-                                artwork(
-                                    colors,
-                                    this.connection.read(cx).client.as_ref(),
-                                    cover,
-                                    34.,
-                                )
+                                artwork(colors, this.connection.read(cx).client(), cover, 34.)
                             } else {
                                 div()
                                     .size(px(34.))
@@ -189,14 +180,14 @@ impl PlayerView {
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         cx.stop_propagation();
-                                        this.browser.set_cursor(row);
+                                        this.library.set_cursor(row);
                                         this.play_selection(cx);
                                         window.focus(&this.library_focus);
                                     },
                                 )),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.browser.set_cursor(row);
+                                this.library.set_cursor(row);
                                 this.open_selected(cx);
                                 window.focus(&this.library_focus);
                             }))

@@ -5,28 +5,43 @@ where practical; views adapt user input and asynchronous results to those models
 
 - `browser.rs`, `folders.rs`: loaded records, visible entries, navigation history,
   server folder tree, selection restoration and queue inputs. Browser does not own
-  active requests or cancellation; its `loaded` flag describes cached page data.
+  active requests or cancellation. Each page holds `Option<PageData>`: artists,
+  albums, songs, mixed search results or a cached folder marker. `loaded()` derives
+  from that option, distinguishing an empty loaded page from an unloaded page.
 - `models.rs`: shared artist, album and song records, library page size, sorting
-  and duration labels. Domain modules do not import these records from the HTTP adapter.
+  and time labels. Unknown total durations use `--:--` consistently in lists,
+  the folder preview and player bar; a zero playback position still uses `0:00`.
+  Domain modules do not import these records from the HTTP adapter.
 - `api.rs`: Subsonic requests, response decoding and authentication. MD5 is used
   for the protocol's salted token, not as a general-purpose password hash.
 - `queue.rs`, `likes.rs`: playback order and optimistic like reconciliation.
 - `player.rs`: audio worker, cancelable buffering/decoding and watch-channel snapshots.
 - `playback_controller.rs`: queue, playback policy, worker recovery and native media
   integration. Views read its state and send commands through its methods.
-- `library_loader.rs`: sole owner of the active library request, task, cancellation
+- `library_controller.rs`: owns Browser and the library loader, coordinating
+  navigation, cached pages, section selection, folder restoration, search changes,
+  pagination and library-specific failures and retries. Its Browser accessor is
+  read-only; selection and navigation changes use explicit controller methods.
+- `library_loader.rs`: owns the active library request, task, cancellation
   and loading status. It rejects outdated and duplicate completions before emitting
-  an event. Navigation cancels this controller; the view applies its accepted
-  outcomes to Browser and reconciles likes and playback selection.
+  an event. LibraryController cancels it on navigation and applies accepted results.
+  The view reconciles likes and playback selection and handles focus and scrolling.
 - `collection_controller.rs`: background collection resolution, cancellation,
   failures and retry state. Playback changes and disconnect cancel pending work;
-  a canceled result cannot start a new queue.
+  a canceled result cannot start a new queue. Completion checks request identity
+  once, stores the queue or failure and returns the event to emit; outdated or
+  duplicate completions emit nothing.
 - `likes_controller.rs`: optimistic like writes, per-song tasks and retry state.
-  Resetting the connection invalidates completions from the previous session.
+  Actions require an explicit Session; Disconnected cannot act as a local demo.
+  Resetting the connection invalidates completions from the previous generation.
 - `media.rs`, `media_macos.rs`: native media commands and Now Playing metadata.
 - `connection.rs`: connection controller owning authentication, credential persistence,
-  operation identities and connection failures. It emits connection events for the view.
+  operation identities, Session and connection failures. It emits connection events for the view.
   `credentials.rs` adapts the system credential store.
+- `session.rs`: explicit Disconnected / Demo / Connected modes. It supplies the
+  optional network client, library identity and connection label. The application
+  view does not maintain an independent demo flag. Session deliberately has no Debug
+  implementation because its connected client holds authentication material.
 - `theme.rs`: Catppuccin Latte / Macchiato palettes and a separate saved
   `ThemePreference` (System / Latte / Macchiato). New preferences follow the OS;
   existing explicit palette choices are preserved. The active GPUI global contains
@@ -39,9 +54,11 @@ where practical; views adapt user input and asynchronous results to those models
   inputs, sliders and tooltips.
 - `settings.rs`, `diagnostics.rs`: background preferences persistence and diagnostics.
 - `slider.rs`: reusable GPUI slider with pointer state and preview/change events.
-- `ui.rs`: application view, navigation and coordination of controllers.
+- `ui.rs`: application view and coordination of controllers and visual state.
+  Construction creates the view, attaches its subscriptions, then initializes
+  playback controls, polling and the initial connection or demo page.
 - `ui_components.rs`: shared buttons, rows, notifications, icons, tooltips and empty states.
-- `demo.rs`: local demo records and loading without a Navidrome server.
+- `demo.rs`: pure local demo records and loading without GPUI or a Navidrome server.
 - `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
   previous focus when its menu closes.
 - `library_view.rs`, `sidebar.rs`: library lists, headers and sidebar rendering.
@@ -84,6 +101,8 @@ Command+F focus the same field. Search does not change the saved last section.
 Legacy saved folder filters are ignored when reading preferences and are never
 written back. Song rows use source indices and share their song collection with
 playback; directory, artist and album rows do not enter the queue.
+PageData keeps shared collections on Arc, so cached history and active playback
+queues retain their records when another page is loaded or pagination appends data.
 
 `Arc` shares immutable loaded collections. Mutable UI state belongs to the GPUI
 entity or its controllers. The audio worker publishes snapshots through a Tokio

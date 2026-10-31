@@ -10,6 +10,7 @@ use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
 use std::sync::Arc;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum CollectionEvent {
     Changed,
     Ready,
@@ -67,14 +68,9 @@ impl CollectionController {
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = worker.await;
             let _ = this.update(cx, |this, cx| {
-                if !this.requests.is_current(request_id) {
-                    return;
+                if let Some(event) = this.finish(request_id, result) {
+                    cx.emit(event);
                 }
-                if let Some(songs) = this.finish(request_id, result) {
-                    this.ready = Some(songs);
-                    cx.emit(CollectionEvent::Ready);
-                }
-                cx.emit(CollectionEvent::Changed);
             });
         }));
         cx.emit(CollectionEvent::Changed);
@@ -90,23 +86,27 @@ impl CollectionController {
         }
     }
 
-    fn finish(&mut self, request_id: u64, result: Result<Vec<Song>>) -> Option<Arc<Vec<Song>>> {
+    fn finish(&mut self, request_id: u64, result: Result<Vec<Song>>) -> Option<CollectionEvent> {
         if !self.requests.is_current(request_id) {
             return None;
         }
         let collection = self.pending.take()?;
+        self.task = None;
         match result {
-            Ok(songs) if !songs.is_empty() => Some(Arc::new(songs)),
+            Ok(songs) if !songs.is_empty() => {
+                self.ready = Some(Arc::new(songs));
+                Some(CollectionEvent::Ready)
+            }
             Ok(_) => {
                 self.failure = Some(format!("No songs in {}", collection.name()).into());
-                None
+                Some(CollectionEvent::Changed)
             }
             Err(error) => {
                 self.failure = Some(Failure::new(
                     format!("Could not play {}: {error:#}", collection.name()),
                     RetryAction::Collection(collection),
                 ));
-                None
+                Some(CollectionEvent::Changed)
             }
         }
     }
@@ -140,10 +140,40 @@ mod tests {
         assert!(controller.pending().is_some());
         let song = serde_json::from_value(json!({"id":"song", "title":"Song"})).unwrap();
         assert_eq!(
-            controller.finish(current, Ok(vec![song])).unwrap()[0].id,
-            "song"
+            controller.finish(current, Ok(vec![song])),
+            Some(CollectionEvent::Ready)
         );
+        assert!(
+            controller
+                .finish(old, Err(anyhow::anyhow!("late failure after success")))
+                .is_none()
+        );
+        assert!(controller.finish(current, Ok(Vec::new())).is_none());
+        assert!(
+            controller
+                .finish(current, Err(anyhow::anyhow!("duplicate failure")))
+                .is_none()
+        );
+        assert!(controller.failure().is_none());
+        assert_eq!(controller.take_ready().unwrap()[0].id, "song");
         assert!(controller.pending().is_none());
+    }
+
+    #[test]
+    fn empty_collection_reports_a_change_without_starting_playback() {
+        let mut controller = CollectionController::default();
+        let (request, _) = controller.requests.start();
+        controller.pending = Some(album());
+        assert_eq!(
+            controller.finish(request, Ok(Vec::new())),
+            Some(CollectionEvent::Changed)
+        );
+        assert!(controller.take_ready().is_none());
+        assert!(controller.pending().is_none());
+        let failure = controller.failure().unwrap();
+        assert!(failure.message.contains("No songs"));
+        assert!(failure.retry.is_none());
+        assert!(controller.finish(request, Ok(Vec::new())).is_none());
     }
 
     #[test]
@@ -151,7 +181,10 @@ mod tests {
         let mut controller = CollectionController::default();
         let (request, _) = controller.requests.start();
         controller.pending = Some(album());
-        controller.finish(request, Err(anyhow::anyhow!("fixture failure")));
+        assert_eq!(
+            controller.finish(request, Err(anyhow::anyhow!("fixture failure"))),
+            Some(CollectionEvent::Changed)
+        );
         assert!(controller.pending().is_none());
         // Observing a transport change cancels work while keeping Retry useful.
         controller.cancel_pending();

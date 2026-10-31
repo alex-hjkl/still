@@ -3,6 +3,7 @@ use crate::{
     api::Navidrome,
     credentials::{Connection, CredentialStore},
     failure::Failure,
+    session::Session,
 };
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
@@ -39,7 +40,7 @@ struct Persistence {
 }
 
 pub struct ConnectionController {
-    pub client: Option<Navidrome>,
+    session: Session,
     pub remember: bool,
     pub saved: bool,
     pub activity: Activity,
@@ -56,7 +57,7 @@ impl EventEmitter<ConnectionEvent> for ConnectionController {}
 impl ConnectionController {
     pub fn new(from_environment: bool) -> Self {
         Self {
-            client: None,
+            session: Session::Disconnected,
             remember: !from_environment,
             saved: false,
             activity: Activity::Idle,
@@ -67,6 +68,20 @@ impl ConnectionController {
             #[cfg(feature = "ui-tests")]
             test_store_available: None,
         }
+    }
+
+    pub fn demo() -> Self {
+        Self {
+            session: Session::Demo,
+            ..Self::new(true)
+        }
+    }
+
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+    pub fn client(&self) -> Option<&Navidrome> {
+        self.session.client()
     }
 
     pub fn is_busy(&self) -> bool {
@@ -105,7 +120,7 @@ impl ConnectionController {
     }
 
     pub fn restore(&mut self, cx: &mut Context<Self>) {
-        if self.is_busy() || self.client.is_some() {
+        if self.is_busy() || self.session.is_active() {
             return;
         }
         let operation = self.begin(Activity::Restoring);
@@ -156,7 +171,7 @@ impl ConnectionController {
     }
 
     pub fn connect(&mut self, connection: Arc<Connection>, persist: bool, cx: &mut Context<Self>) {
-        if self.is_busy() || self.client.is_some() {
+        if self.is_busy() || self.session.is_active() {
             return;
         }
         let operation = self.begin(Activity::Connecting);
@@ -222,7 +237,7 @@ impl ConnectionController {
         self.activity = Activity::Idle;
         match result {
             Ok(client) => {
-                self.client = Some(client);
+                self.session = Session::Connected(client);
                 if let Some(persistence) = persistence {
                     self.finish_persistence(
                         persistence.remember,
@@ -346,7 +361,7 @@ impl ConnectionController {
         if self.is_busy() {
             return false;
         }
-        self.client = None;
+        self.session = Session::Disconnected;
         self.operation = self.operation.wrapping_add(1);
         self.task = None;
         self.failure = None;
@@ -443,7 +458,7 @@ mod tests {
                 result: Err(anyhow::anyhow!("store unavailable")),
             })
         ));
-        assert!(controller.client.is_some());
+        assert!(controller.client().is_some());
         assert!(!controller.saved);
         assert!(!controller.is_busy());
         let Some(ConnectionRetry::Save(retry)) = controller
@@ -476,7 +491,7 @@ mod tests {
         let first = controller.begin(Activity::Connecting);
         let second = controller.begin(Activity::Connecting);
         assert!(!controller.finish_connect(first, Ok(client()), None));
-        assert!(controller.client.is_none());
+        assert!(controller.client().is_none());
         assert!(controller.is_current(second));
         assert!(!controller.finish_connect(
             second,
@@ -488,7 +503,7 @@ mod tests {
             })
         ));
         assert!(controller.saved);
-        assert!(controller.client.is_none());
+        assert!(controller.client().is_none());
         assert!(controller.failure().is_some());
     }
 

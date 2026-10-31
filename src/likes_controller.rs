@@ -1,9 +1,9 @@
 //! Runs optimistic like writes and rejects completions from an old connection.
 use crate::{
-    api::Navidrome,
     failure::{Failure, Failures, Operation, RetryAction},
     likes::Likes,
     models::Song,
+    session::Session,
 };
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
@@ -17,7 +17,7 @@ pub enum LikesEvent {
 #[derive(Default)]
 pub struct LikesController {
     state: Likes,
-    session: u64,
+    generation: u64,
     tasks: HashMap<String, Task<()>>,
     failures: Failures,
 }
@@ -38,7 +38,7 @@ impl LikesController {
     }
 
     pub fn reset(&mut self) {
-        self.session = self.session.wrapping_add(1);
+        self.generation = self.generation.wrapping_add(1);
         self.tasks.clear();
         self.state = Likes::default();
         self.dismiss_failures();
@@ -48,43 +48,53 @@ impl LikesController {
         self.state.accept_server(songs, revision)
     }
 
-    // A missing client is the local demo; callers only enable actions in a demo or a session.
-    pub fn toggle(&mut self, client: Option<Navidrome>, song: Song, cx: &mut Context<Self>) {
-        if let Some(liked) = self.state.begin(&song) {
-            self.send(client, song, liked, cx);
+    pub fn toggle(&mut self, session: &Session, song: Song, cx: &mut Context<Self>) {
+        if let Some(liked) = self.begin(session, &song, None) {
+            self.send(session, song, liked, cx);
         }
     }
 
-    pub fn set(
-        &mut self,
-        client: Option<Navidrome>,
-        song: Song,
-        liked: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(liked) = self.state.begin_set(&song, liked) {
-            self.send(client, song, liked, cx);
+    pub fn set(&mut self, session: &Session, song: Song, liked: bool, cx: &mut Context<Self>) {
+        if let Some(liked) = self.begin(session, &song, Some(liked)) {
+            self.send(session, song, liked, cx);
         }
     }
 
-    pub fn retry(&mut self, client: Option<Navidrome>, id: &str, cx: &mut Context<Self>) {
+    pub fn retry(&mut self, session: &Session, id: &str, cx: &mut Context<Self>) {
+        if !session.is_active() {
+            return;
+        }
         let action = self
             .failures
             .take(&Operation::Like(id.to_owned()))
             .and_then(|failure| failure.retry);
         if let Some(RetryAction::Like { song, liked }) = action {
-            self.set(client, song, liked, cx);
+            self.set(session, song, liked, cx);
         }
     }
 
-    fn send(&mut self, client: Option<Navidrome>, song: Song, liked: bool, cx: &mut Context<Self>) {
+    fn begin(&mut self, session: &Session, song: &Song, liked: Option<bool>) -> Option<bool> {
+        if !session.is_active() {
+            return None;
+        }
+        match liked {
+            Some(liked) => self.state.begin_set(song, liked),
+            None => self.state.begin(song),
+        }
+    }
+
+    fn send(&mut self, session: &Session, song: Song, liked: bool, cx: &mut Context<Self>) {
         self.failures.clear(&Operation::Like(song.id.clone()));
-        let Some(client) = client else {
-            self.finish(self.session, &song, liked, Ok(()));
-            cx.emit(LikesEvent::Saved);
-            return;
+        let client = match session {
+            Session::Disconnected => return,
+            Session::Demo => {
+                self.finish(self.generation, &song, liked, Ok(()));
+                cx.emit(LikesEvent::Saved);
+                return;
+            }
+            Session::Connected(client) => client.clone(),
         };
-        let session = self.session;
+        let generation = self.generation;
         let id = song.id.clone();
         let worker_id = id.clone();
         let worker = cx
@@ -93,10 +103,10 @@ impl LikesController {
         let task = cx.spawn(async move |this, cx| {
             let result = worker.await;
             let _ = this.update(cx, |this, cx| {
-                if this.session != session {
+                if this.generation != generation {
                     return;
                 }
-                let saved = this.finish(session, &song, liked, result);
+                let saved = this.finish(generation, &song, liked, result);
                 this.tasks.remove(&song.id);
                 cx.emit(if saved {
                     LikesEvent::Saved
@@ -109,8 +119,8 @@ impl LikesController {
         cx.emit(LikesEvent::Changed);
     }
 
-    fn finish(&mut self, session: u64, song: &Song, liked: bool, result: Result<()>) -> bool {
-        if self.session != session {
+    fn finish(&mut self, generation: u64, song: &Song, liked: bool, result: Result<()>) -> bool {
+        if self.generation != generation {
             return false;
         }
         self.state.finish(song, result.is_ok());
@@ -142,18 +152,37 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn disconnected_actions_do_not_become_local_demo_likes() {
+        let mut controller = LikesController::default();
+        let song: Song = serde_json::from_value(json!({"id":"song", "title":"Song"})).unwrap();
+        let revision = controller.state().revision();
+        assert_eq!(controller.begin(&Session::Disconnected, &song, None), None);
+        assert_eq!(
+            controller.begin(&Session::Disconnected, &song, Some(true)),
+            None
+        );
+        assert_eq!(controller.state().revision(), revision);
+        assert!(!controller.state().is_pending(&song.id));
+        assert!(!controller.state().is_liked(&song));
+        assert_eq!(controller.begin(&Session::Demo, &song, None), Some(true));
+        assert!(controller.state().is_pending(&song.id));
+        assert!(controller.finish(controller.generation, &song, true, Ok(())));
+        assert!(controller.state().is_liked(&song));
+    }
+
+    #[test]
     fn a_previous_session_cannot_complete_or_fail_a_new_like_for_the_same_song() {
         let mut controller = LikesController::default();
         let song: Song = serde_json::from_value(json!({"id":"same", "title":"Song"})).unwrap();
         controller.state.begin(&song);
-        let old = controller.session;
+        let old = controller.generation;
         controller.reset();
         controller.state.begin(&song);
         assert!(!controller.finish(old, &song, true, Ok(())));
         assert!(!controller.finish(old, &song, true, Err(anyhow::anyhow!("old error"))));
         assert!(controller.state().is_pending(&song.id));
         assert_eq!(controller.failures().iter().count(), 0);
-        assert!(controller.finish(controller.session, &song, true, Ok(())));
+        assert!(controller.finish(controller.generation, &song, true, Ok(())));
         assert!(controller.state().is_liked(&song));
         assert!(!controller.state().is_pending(&song.id));
     }
@@ -164,7 +193,7 @@ mod tests {
         let song: Song = serde_json::from_value(json!({"id":"song", "title":"Song"})).unwrap();
         controller.state.begin(&song);
         controller.finish(
-            controller.session,
+            controller.generation,
             &song,
             true,
             Err(anyhow::anyhow!("fixture failure")),

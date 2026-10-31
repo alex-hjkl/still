@@ -40,7 +40,7 @@ impl PlayerView {
                             .min_w_0()
                             .child(artwork(
                                 colors,
-                                self.connection.read(cx).client.as_ref(),
+                                self.connection.read(cx).client(),
                                 current.and_then(Song::artwork_id),
                                 40.,
                             ))
@@ -260,11 +260,7 @@ impl PlayerView {
                             .text_size(px(TEXT_CAPTION))
                             .text_right()
                             .text_color(rgb(colors.muted))
-                            .child(if duration > 0 {
-                                time_label(duration)
-                            } else {
-                                "--:--".into()
-                            }),
+                            .child(duration_label(duration)),
                     ),
             )
             .into_any_element()

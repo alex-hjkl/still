@@ -124,22 +124,13 @@ impl PlayerView {
         {
             self.ui_probe.borrow_mut().sidebar_width = width;
         }
-        let selected = if matches!(self.browser.state().page, Page::Search(_)) {
+        let selected = if matches!(self.library.browser().state().page, Page::Search(_)) {
             usize::MAX
         } else {
             self.section_index()
         };
         let hints = window.is_window_active() && section_hints(window.modifiers());
-        let server_label = if self.demo {
-            "Demo · no playback".to_owned()
-        } else {
-            self.connection
-                .read(cx)
-                .client
-                .as_ref()
-                .map(Navidrome::server_label)
-                .unwrap_or_default()
-        };
+        let server_label = self.connection.read(cx).session().server_label();
         #[cfg(feature = "ui-tests")]
         let server_label = if std::env::var_os("STILL_DEMO_CAPTURE").is_some() {
             "Demo library".to_owned()
@@ -221,7 +212,7 @@ impl PlayerView {
                     })
                     .tooltip(move |_, cx| cx.new(|_| Hint::new(hint.clone())).into())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browser.clear_history();
+                        this.library.clear_history();
                         this.open_section(section, cx);
                     }))
             }))

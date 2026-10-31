@@ -1,25 +1,25 @@
 use crate::{
-    api::Navidrome,
     artwork::{app_icon, artwork},
-    browser::{Browser, BrowserEntry, LibraryData, LibraryRequest, Page},
+    browser::{BrowserEntry, LibraryData, Page},
     collection::Collection,
     collection_controller::{CollectionController, CollectionEvent},
     connection::{Activity, ConnectionController, ConnectionEvent},
     credentials::Connection,
-    failure::{Failure, Failures, Operation, RetryAction},
-    folders::{FolderLibrary, file_name},
+    failure::{Failures, Operation, RetryAction},
+    folders::file_name,
     input::{InputEvent, TextInput},
     keyboard::{Command, Keys, moved_cursor, section_hints},
     layout::{
         ALBUM_ROW_HEIGHT, ARTIST_ROW_HEIGHT, FOLDER_ROW_HEIGHT, PLAYER_HEIGHT,
         SIDEBAR_COMPACT_WIDTH, SIDEBAR_EXPANDED_WIDTH, SONG_ROW_HEIGHT, page_items,
     },
-    library_loader::{LibraryLoader, LoadContext, LoadOutcome},
+    library_controller::{LibraryContext, LibraryController},
+    library_loader::LoadOutcome,
     likes_controller::{LikesController, LikesEvent},
-    models::{Album, Artist, Song, time_label},
+    models::{Song, duration_label, time_label},
     navigation::Section,
     playback_controller::PlaybackController,
-    settings::{SavedFolder, Settings},
+    settings::Settings,
     shortcuts,
     slider::{CommitMode, Slider, SliderEvent},
     theme::{Palette, TEXT_BODY, TEXT_CAPTION, TEXT_SECONDARY, ThemePreference},
@@ -40,8 +40,6 @@ mod connection_screen;
 #[path = "theme_picker.rs"]
 mod theme_picker;
 use theme_picker::ThemeMenu;
-#[path = "demo.rs"]
-mod demo;
 #[path = "folder_columns.rs"]
 mod folder_columns;
 #[path = "keyboard_help.rs"]
@@ -79,8 +77,7 @@ enum CollectionFailurePolicy {
 
 pub struct PlayerView {
     connection: Entity<ConnectionController>,
-    browser: Browser,
-    library_loader: Entity<LibraryLoader>,
+    library: LibraryController,
     collections: Entity<CollectionController>,
     server: Entity<TextInput>,
     username: Entity<TextInput>,
@@ -105,12 +102,10 @@ pub struct PlayerView {
     failures: Failures,
     transport: PlaybackController,
     settings: Settings,
-    pending_folder: Option<SavedFolder>,
     #[cfg(feature = "ui-tests")]
     ui_probe: std::rc::Rc<std::cell::RefCell<ui_tests::RenderProbe>>,
     #[cfg(feature = "ui-tests")]
     demo_hint: Option<ui_tests::DemoHint>,
-    demo: bool,
 }
 
 impl PlayerView {
@@ -145,179 +140,29 @@ impl PlayerView {
             cx.new(|cx| TextInput::new("Search library", String::new(), false, cx).clearable());
         let seek_slider = cx.new(|_| Slider::new("seek", CommitMode::OnRelease));
         let volume_slider = cx.new(|_| Slider::new("volume-slider", CommitMode::Continuous));
-        let library_loader = cx.new(|_| LibraryLoader::default());
+        let library = LibraryController::new(cx);
         let collections = cx.new(|_| CollectionController::default());
         let likes = cx.new(|_| LikesController::default());
         let environment_connection = ["NAVIDROME_URL", "NAVIDROME_USERNAME", "NAVIDROME_PASSWORD"]
             .iter()
             .any(|name| std::env::var_os(name).is_some());
-        let connection = cx.new(|_| ConnectionController::new(environment_connection));
-        let mut subscriptions = Vec::new();
-        subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
-            // Wayland holds its platform state while delivering this event.
-            // Read the current appearance after that callback has returned.
-            cx.on_next_frame(window, |this, _, cx| {
-                this.settings
-                    .value()
-                    .theme
-                    .follow_appearance(cx.window_appearance(), cx);
-            });
-        }));
-        subscriptions.push(cx.subscribe(&connection, |this, _, event, cx| {
-            match event {
-                ConnectionEvent::Restored(connection) => {
-                    this.server.update(cx, |field, cx| {
-                        field.set_value(connection.server.clone(), cx)
-                    });
-                    this.username.update(cx, |field, cx| {
-                        field.set_value(connection.username.clone(), cx)
-                    });
-                    this.password.update(cx, |field, cx| {
-                        field.set_value(connection.password.clone(), cx)
-                    });
-                }
-                ConnectionEvent::Connected => {
-                    this.password.update(cx, |field, cx| field.clear(cx));
-                    this.open_section(this.settings.value().last_section, cx);
-                }
-                ConnectionEvent::Changed => {}
-            }
-            cx.notify();
-        }));
-        subscriptions.push(cx.subscribe(&library_loader, |this, loader, _, cx| {
-            let outcome = loader.update(cx, |loader, _| loader.take_outcome());
-            if let Some(outcome) = outcome {
-                this.accept_library(outcome, cx);
-            }
-        }));
-        subscriptions.push(cx.subscribe(&collections, |this, controller, event, cx| {
-            if let CollectionEvent::Ready = event
-                && let Some(songs) = controller.update(cx, |controller, _| controller.take_ready())
-            {
-                this.play(songs, 0, cx);
-            }
-            cx.notify();
-        }));
-        subscriptions.push(cx.subscribe(&likes, |this, _, event, cx| {
-            if matches!(event, LikesEvent::Saved)
-                && matches!(this.browser.state().page, Page::Liked)
-            {
-                this.merge_liked(cx);
-            }
-            cx.notify();
-        }));
-        subscriptions.push(cx.subscribe(&seek_slider, |this, _, event, cx| {
-            if let SliderEvent::Change(ratio) = event
-                && this.transport.queue().current().is_some()
-            {
-                this.transport
-                    .seek((this.transport.duration() as f32 * ratio).round() as u64);
-            }
-            cx.notify();
-        }));
-        subscriptions.push(cx.subscribe(&volume_slider, |this, _, event, cx| {
-            if let SliderEvent::Change(value) = event {
-                this.set_volume(*value, cx);
-            }
-        }));
-        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
-            cx.on_next_frame(window, |this, _, cx| {
-                this.settings
-                    .value()
-                    .theme
-                    .follow_appearance(cx.window_appearance(), cx);
-            });
-            this.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
-            this.volume_slider
-                .update(cx, |slider, cx| slider.cancel(cx));
-            cx.notify();
-        }));
-        subscriptions.push(cx.observe_window_bounds(window, |this, window, _| {
-            if matches!(window.window_bounds(), WindowBounds::Windowed(_)) {
-                let size = window.viewport_size();
-                this.settings.update(|value| {
-                    value.window_size = [f32::from(size.width), f32::from(size.height)];
-                });
-            }
-        }));
-        subscriptions.push(cx.on_app_quit(|this, cx| {
-            this.transport.clear_media();
-            this.remember_folder(cx);
-            let pending = this.settings.flush();
-            async move {
-                match pending.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => crate::diagnostics::event(&format!(
-                        "Could not save preferences on exit: {error:#}"
-                    )),
-                    Err(_) => crate::diagnostics::event(
-                        "Preferences worker stopped before the final save",
-                    ),
-                }
-            }
-        }));
-        let fields = [server.clone(), username.clone(), password.clone()];
-        for (index, field) in fields.iter().enumerate() {
-            let fields = fields.clone();
-            subscriptions.push(cx.subscribe_in(
-                field,
-                window,
-                move |this, _, event, window, cx| {
-                    match event {
-                        InputEvent::Submit => this.connect(cx),
-                        InputEvent::Next(reverse) => {
-                            let next = if *reverse {
-                                (index + 2) % 3
-                            } else {
-                                (index + 1) % 3
-                            };
-                            window.focus(&fields[next].focus_handle(cx));
-                        }
-                        InputEvent::Change => this
-                            .connection
-                            .update(cx, |connection, _| connection.edited()),
-                    }
-                },
-            ));
-        }
-        subscriptions.push(
-            cx.subscribe_in(&search, window, |this, input, event, window, cx| {
-                match event {
-                    InputEvent::Change => {
-                        this.search_changed(input.read(cx).value(), window, cx);
-                        this.remember_folder(cx);
-                    }
-                    InputEvent::Submit | InputEvent::Next(_) => {
-                        this.submit_search(cx);
-                        window.focus(&this.library_focus);
-                        this.keyboard_active = true;
-                        this.reveal_cursor();
-                    }
-                }
-                cx.notify();
-            }),
-        );
-        let timer = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                timer.timer(Duration::from_millis(200)).await;
-                if this.update(cx, |this, cx| this.tick(cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
         let demo = std::env::args().any(|arg| arg == "--demo");
+        let connection = cx.new(|_| {
+            if demo {
+                ConnectionController::demo()
+            } else {
+                ConnectionController::new(environment_connection)
+            }
+        });
         let mut view = Self {
             connection,
-            browser: Browser::default(),
-            library_loader,
+            library,
             collections,
             server,
             username,
             password,
             search,
-            subscriptions,
+            subscriptions: Vec::new(),
             library_focus: cx.focus_handle(),
             focus_library: demo,
             keyboard_active: false,
@@ -340,29 +185,211 @@ impl PlayerView {
             failures: Failures::default(),
             transport: PlaybackController::new(initial_volume, initial_shuffle),
             settings,
-            pending_folder: None,
             #[cfg(feature = "ui-tests")]
             ui_probe: Default::default(),
             #[cfg(feature = "ui-tests")]
             demo_hint: None,
-            demo,
         };
-        view.sync_seek_slider(cx);
-        view.sync_volume_slider(cx);
-        if demo {
-            view.open_section(view.settings.value().last_section, cx);
-        } else if !view.server.read(cx).value().is_empty()
-            && !view.username.read(cx).value().is_empty()
-            && !view.password.read(cx).value().is_empty()
+        view.subscribe_events(window, cx);
+        view.initialize(window, environment_connection, cx);
+        view
+    }
+
+    fn subscribe_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.subscriptions
+            .push(cx.observe_window_appearance(window, |_, window, cx| {
+                // Wayland holds its platform state while delivering this event.
+                // Read the current appearance after that callback has returned.
+                cx.on_next_frame(window, |this, _, cx| {
+                    this.settings
+                        .value()
+                        .theme
+                        .follow_appearance(cx.window_appearance(), cx);
+                });
+            }));
+        self.subscriptions
+            .push(cx.subscribe(&self.connection, |this, _, event, cx| {
+                match event {
+                    ConnectionEvent::Restored(connection) => {
+                        this.server.update(cx, |field, cx| {
+                            field.set_value(connection.server.clone(), cx)
+                        });
+                        this.username.update(cx, |field, cx| {
+                            field.set_value(connection.username.clone(), cx)
+                        });
+                        this.password.update(cx, |field, cx| {
+                            field.set_value(connection.password.clone(), cx)
+                        });
+                    }
+                    ConnectionEvent::Connected => {
+                        this.password.update(cx, |field, cx| field.clear(cx));
+                        this.open_section(this.settings.value().last_section, cx);
+                    }
+                    ConnectionEvent::Changed => {}
+                }
+                cx.notify();
+            }));
+        self.subscriptions
+            .push(cx.subscribe(self.library.loader(), |this, loader, _, cx| {
+                let outcome = loader.update(cx, |loader, _| loader.take_outcome());
+                if let Some(outcome) = outcome {
+                    this.accept_library(outcome, cx);
+                }
+            }));
+        self.subscriptions.push(
+            cx.subscribe(&self.collections, |this, controller, event, cx| {
+                if let CollectionEvent::Ready = event
+                    && let Some(songs) =
+                        controller.update(cx, |controller, _| controller.take_ready())
+                {
+                    this.play(songs, 0, cx);
+                }
+                cx.notify();
+            }),
+        );
+        self.subscriptions
+            .push(cx.subscribe(&self.likes, |this, _, event, cx| {
+                if matches!(event, LikesEvent::Saved)
+                    && matches!(this.library.browser().state().page, Page::Liked)
+                {
+                    this.merge_liked(cx);
+                }
+                cx.notify();
+            }));
+        self.subscriptions
+            .push(cx.subscribe(&self.seek_slider, |this, _, event, cx| {
+                if let SliderEvent::Change(ratio) = event
+                    && this.transport.queue().current().is_some()
+                {
+                    this.transport
+                        .seek((this.transport.duration() as f32 * ratio).round() as u64);
+                }
+                cx.notify();
+            }));
+        self.subscriptions
+            .push(cx.subscribe(&self.volume_slider, |this, _, event, cx| {
+                if let SliderEvent::Change(value) = event {
+                    this.set_volume(*value, cx);
+                }
+            }));
+        self.subscriptions
+            .push(cx.observe_window_activation(window, |this, window, cx| {
+                cx.on_next_frame(window, |this, _, cx| {
+                    this.settings
+                        .value()
+                        .theme
+                        .follow_appearance(cx.window_appearance(), cx);
+                });
+                this.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
+                this.volume_slider
+                    .update(cx, |slider, cx| slider.cancel(cx));
+                cx.notify();
+            }));
+        self.subscriptions
+            .push(cx.observe_window_bounds(window, |this, window, _| {
+                if matches!(window.window_bounds(), WindowBounds::Windowed(_)) {
+                    let size = window.viewport_size();
+                    this.settings.update(|value| {
+                        value.window_size = [f32::from(size.width), f32::from(size.height)];
+                    });
+                }
+            }));
+        self.subscriptions.push(cx.on_app_quit(|this, cx| {
+            this.transport.clear_media();
+            this.remember_folder(cx);
+            let pending = this.settings.flush();
+            async move {
+                match pending.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diagnostics::event(&format!(
+                        "Could not save preferences on exit: {error:#}"
+                    )),
+                    Err(_) => crate::diagnostics::event(
+                        "Preferences worker stopped before the final save",
+                    ),
+                }
+            }
+        }));
+        let fields = [
+            self.server.clone(),
+            self.username.clone(),
+            self.password.clone(),
+        ];
+        for (index, field) in fields.iter().enumerate() {
+            let fields = fields.clone();
+            self.subscriptions.push(cx.subscribe_in(
+                field,
+                window,
+                move |this, _, event, window, cx| {
+                    match event {
+                        InputEvent::Submit => this.connect(cx),
+                        InputEvent::Next(reverse) => {
+                            let next = if *reverse {
+                                (index + 2) % 3
+                            } else {
+                                (index + 1) % 3
+                            };
+                            window.focus(&fields[next].focus_handle(cx));
+                        }
+                        InputEvent::Change => this
+                            .connection
+                            .update(cx, |connection, _| connection.edited()),
+                    }
+                },
+            ));
+        }
+        self.subscriptions.push(cx.subscribe_in(
+            &self.search,
+            window,
+            |this, input, event, window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        this.search_changed(input.read(cx).value(), window, cx);
+                        this.remember_folder(cx);
+                    }
+                    InputEvent::Submit | InputEvent::Next(_) => {
+                        this.submit_search(cx);
+                        window.focus(&this.library_focus);
+                        this.keyboard_active = true;
+                        this.reveal_cursor();
+                    }
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    fn initialize(
+        &mut self,
+        window: &mut Window,
+        environment_connection: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let timer = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                timer.timer(Duration::from_millis(200)).await;
+                if this.update(cx, |this, cx| this.tick(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        self.sync_seek_slider(cx);
+        self.sync_volume_slider(cx);
+        if self.connection.read(cx).session().is_demo() {
+            self.open_section(self.settings.value().last_section, cx);
+        } else if !self.server.read(cx).value().is_empty()
+            && !self.username.read(cx).value().is_empty()
+            && !self.password.read(cx).value().is_empty()
         {
-            view.connect(cx);
+            self.connect(cx);
         } else {
-            window.focus(&view.server.focus_handle(cx));
+            window.focus(&self.server.focus_handle(cx));
             if !environment_connection {
-                view.restore_connection(cx);
+                self.restore_connection(cx);
             }
         }
-        view
     }
 
     fn restore_connection(&mut self, cx: &mut Context<Self>) {
@@ -386,15 +413,13 @@ impl PlayerView {
             return;
         }
         self.remember_folder(cx);
-        self.pending_folder = None;
-        self.browser.clear();
+        self.library.clear(cx);
         self.cancel_collection(cx);
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
         self.sync_seek_slider(cx);
         self.connection
             .update(cx, |connection, cx| connection.disconnect(cx));
-        self.demo = false;
         self.failures = Failures::default();
         self.likes.update(cx, |likes, _| likes.reset());
         self.password.update(cx, |field, cx| field.clear(cx));
@@ -415,6 +440,13 @@ impl PlayerView {
                 )
             })
             .collect();
+        if let Some(failure) = self.library.failure() {
+            failures.push((
+                FailureTarget::Operation(Operation::Library),
+                failure.message.clone(),
+                failure.retry.is_some(),
+            ));
+        }
         if let Some(failure) = self.collections.read(cx).failure() {
             failures.push((
                 FailureTarget::Operation(Operation::Collection),
@@ -466,20 +498,14 @@ impl PlayerView {
             .into_any_element()
     }
 
-    fn reset_library_load(&mut self, cx: &mut Context<Self>) {
-        self.search_delay = None;
-        self.library_loader.update(cx, |loader, _| loader.cancel());
-        self.failures.clear(&Operation::Library);
-    }
-
     fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
-        self.reset_library_load(cx);
+        self.search_delay = None;
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
         self.list_scroll = UniformListScrollHandle::new();
         self.reset_folder_columns();
-        let text = match &self.browser.state().page {
+        let text = match &self.library.browser().state().page {
             Page::Search(query) => query.clone(),
             _ => String::new(),
         };
@@ -489,72 +515,44 @@ impl PlayerView {
 
     fn navigate(&mut self, page: Page, remember: bool, cx: &mut Context<Self>) {
         self.remember_folder(cx);
-        self.pending_folder = None;
-        self.browser.navigate(page, remember);
+        self.library.navigate(page, remember, cx);
         self.navigation_changed(cx);
     }
 
     fn remember_folder(&mut self, cx: &gpui::App) {
-        let library_id = if self.demo {
-            "demo".to_owned()
-        } else if let Some(client) = &self.connection.read(cx).client {
-            client.library_id()
-        } else {
-            return;
-        };
-        if let Some(folder) = self.browser.saved_folder(library_id) {
+        if let Some(saved) = self
+            .library
+            .saved_folder(self.connection.read(cx).session())
+        {
             self.settings
-                .update(|value| value.last_folder = Some(folder));
+                .update(|value| value.last_folder = Some(saved));
         }
     }
 
     fn open_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.remember_folder(cx);
-        let library_id = if self.demo {
-            "demo".to_owned()
-        } else {
-            self.connection
-                .read(cx)
-                .client
-                .as_ref()
-                .map(Navidrome::library_id)
-                .unwrap_or_default()
-        };
-        let saved = self
-            .settings
-            .value()
-            .last_folder
-            .clone()
-            .filter(|saved| section == Section::Folders && saved.library_id == library_id);
-        let page = saved.as_ref().map_or_else(
-            || Page::for_section(section),
-            |saved| Page::Folder(saved.path.clone()),
+        let session = self.connection.read(cx).session().clone();
+        self.library.open_section(
+            section,
+            &session,
+            self.settings.value().last_folder.clone(),
+            cx,
         );
-        self.navigate(page, false, cx);
-        if let Some(saved) = saved {
-            if self.browser.state().loaded {
-                self.browser.restore_folder(&saved);
-                self.reset_navigation_ui(cx);
-                self.remember_folder(cx);
-            } else {
-                self.pending_folder = Some(saved);
-            }
-        }
+        self.navigation_changed(cx);
     }
 
     fn navigation_changed(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.browser.state().page, Page::Search(_)) {
+        if !matches!(self.library.browser().state().page, Page::Search(_)) {
             self.settings
-                .update(|value| value.last_section = self.browser.state().page.section());
+                .update(|value| value.last_section = self.library.browser().state().page.section());
         }
         self.reset_navigation_ui(cx);
-        if !self.browser.state().loaded {
-            if self.demo {
-                self.load_demo_page(cx);
-            } else {
-                self.load(self.browser.request(), cx);
-            }
-        } else if matches!(self.browser.state().page, Page::Liked) {
+        let context = self.library_context(cx);
+        if let Some(outcome) = self.library.load_current(context, cx) {
+            self.accept_library(outcome, cx);
+        } else if matches!(self.library.browser().state().page, Page::Liked)
+            && self.library.browser().state().loaded()
+        {
             self.merge_liked(cx);
         }
         self.remember_folder(cx);
@@ -562,79 +560,62 @@ impl PlayerView {
         cx.notify();
     }
 
-    fn load(&mut self, request: LibraryRequest, cx: &mut Context<Self>) {
-        let Some(client) = self.connection.read(cx).client.clone() else {
-            return;
-        };
-        self.failures.clear(&Operation::Library);
-        let context = LoadContext {
-            request,
+    fn library_context(&self, cx: &gpui::App) -> LibraryContext {
+        LibraryContext {
+            session: self.connection.read(cx).session().clone(),
             like_revision: self.likes.read(cx).state().revision(),
             playback_generation: self.transport.generation(),
-        };
-        self.library_loader
-            .update(cx, |loader, cx| loader.start(client, context, cx));
-        cx.notify();
+        }
     }
 
-    fn accept_library(&mut self, outcome: LoadOutcome, cx: &mut Context<Self>) {
-        let LoadOutcome { context, result } = outcome;
-        let LoadContext {
-            request,
-            like_revision,
-            playback_generation,
-        } = context;
-        match result {
-            Ok(mut data) => {
-                if matches!(self.browser.state().page, Page::Liked)
-                    && let LibraryData::Songs(songs) = data
-                {
-                    data = LibraryData::Songs(
-                        self.likes
-                            .update(cx, |likes, _| likes.accept_server(songs, like_revision)),
-                    );
-                }
-                self.browser.apply(data, request.offset > 0);
-                if let Some(saved) = self.pending_folder.take() {
-                    self.browser.restore_folder(&saved);
-                    self.reset_navigation_ui(cx);
-                }
-                self.remember_folder(cx);
-            }
-            Err(error) => self.failures.set(
-                Operation::Library,
-                Failure::new(format!("{error:#}"), RetryAction::Library(request)),
-            ),
+    fn accept_library(&mut self, mut outcome: LoadOutcome, cx: &mut Context<Self>) {
+        if matches!(outcome.context.request.page, Page::Liked)
+            && let Ok(LibraryData::Songs(songs)) = &mut outcome.result
+        {
+            let songs = std::mem::take(songs);
+            outcome.result = Ok(LibraryData::Songs(
+                if self.connection.read(cx).session().is_demo() {
+                    self.likes.read(cx).state().merge_liked(songs)
+                } else {
+                    self.likes.update(cx, |likes, _| {
+                        likes.accept_server(songs, outcome.context.like_revision)
+                    })
+                },
+            ));
         }
-        if self.transport.generation() == playback_generation || !self.follow_current_track(cx) {
+        let change = self.library.accept(outcome);
+        if change.restored_folder {
+            self.reset_navigation_ui(cx);
+        }
+        self.remember_folder(cx);
+        if self.transport.generation() == change.playback_generation
+            || !self.follow_current_track(cx)
+        {
             self.reveal_cursor();
         }
         cx.notify();
     }
 
     fn load_more(&mut self, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
-            return;
+        let context = self.library_context(cx);
+        if let Some(outcome) = self.library.load_more(context, cx) {
+            self.accept_library(outcome, cx);
         }
-        if let Some(request) = self.browser.more_request() {
-            self.load(request, cx);
-        }
+        cx.notify();
     }
 
     fn back(&mut self, cx: &mut Context<Self>) {
         self.remember_folder(cx);
-        self.pending_folder = None;
-        if self.browser.back() {
+        if self.library.back(cx) {
             self.navigation_changed(cx);
         }
     }
 
     fn refresh_folders(&mut self, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
-            return;
+        self.remember_folder(cx);
+        if self.library.refresh_folders(cx) {
+            self.navigation_changed(cx);
         }
-        self.browser.clear_folders();
-        self.navigate(Page::Folder(String::new()), false, cx);
     }
 
     fn retry(&mut self, target: FailureTarget, cx: &mut Context<Self>) {
@@ -644,28 +625,28 @@ impl PlayerView {
                     .update(cx, |connection, cx| connection.retry(cx));
             }
             FailureTarget::Operation(Operation::Collection) => {
-                if let Some(client) = self.connection.read(cx).client.clone() {
+                if let Some(client) = self.connection.read(cx).client().cloned() {
                     self.collections
                         .update(cx, |collections, cx| collections.retry(client, cx));
                 }
             }
             FailureTarget::Operation(Operation::Like(id)) => {
-                let client = self.connection.read(cx).client.clone();
-                if self.demo || client.is_some() {
-                    self.likes
-                        .update(cx, |likes, cx| likes.retry(client, &id, cx));
+                let session = self.connection.read(cx).session().clone();
+                self.likes
+                    .update(cx, |likes, cx| likes.retry(&session, &id, cx));
+            }
+            FailureTarget::Operation(Operation::Library) => {
+                let context = self.library_context(cx);
+                if let Some(outcome) = self.library.retry(context, cx) {
+                    self.accept_library(outcome, cx);
                 }
             }
             FailureTarget::Operation(operation) => {
-                if operation == Operation::Library && self.library_loader.read(cx).is_loading() {
-                    return;
-                }
                 let action = self
                     .failures
                     .take(&operation)
                     .and_then(|failure| failure.retry);
                 match action {
-                    Some(RetryAction::Library(request)) => self.load(request, cx),
                     Some(RetryAction::Playback(generation))
                         if self.transport.generation() == generation =>
                     {
@@ -680,7 +661,7 @@ impl PlayerView {
 
     fn play(&mut self, queue: Arc<Vec<Song>>, index: usize, cx: &mut Context<Self>) {
         self.cancel_collection(cx);
-        if self.demo {
+        if self.connection.read(cx).session().is_demo() {
             self.failures.set(
                 Operation::Playback,
                 "This demo previews the interface. Connect to Navidrome to play music.".into(),
@@ -688,14 +669,14 @@ impl PlayerView {
             cx.notify();
             return;
         }
-        if let Some(client) = &self.connection.read(cx).client
+        if let Some(client) = self.connection.read(cx).client()
             && self.transport.play(client, queue, index)
         {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn play_current(&mut self, cx: &mut Context<Self>) {
-        if let Some(client) = &self.connection.read(cx).client
+        if let Some(client) = self.connection.read(cx).client()
             && self.transport.restart(client)
         {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
@@ -732,7 +713,7 @@ impl PlayerView {
     }
 
     fn follow_current_track(&mut self, cx: &gpui::App) -> bool {
-        if self.show_help || self.library_loader.read(cx).is_loading() {
+        if self.show_help || self.library.is_loading(cx) {
             return false;
         }
         let Some(song) = self.transport.queue().current() else {
@@ -745,42 +726,49 @@ impl PlayerView {
         }) else {
             return false;
         };
-        self.browser.set_cursor(row);
+        self.library.set_cursor(row);
         self.list_scroll.scroll_to_item(row, ScrollStrategy::Center);
         true
     }
 
     fn play_row(&mut self, row: usize, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
+        if self.library.is_loading(cx) {
             return;
         }
-        if let Some((songs, index)) = self.browser.selected_queue(row) {
-            self.browser.set_cursor(row);
+        if let Some((songs, index)) = self.library.browser().selected_queue(row) {
+            self.library.set_cursor(row);
             self.play(songs, index, cx);
         }
     }
 
     fn play_selection(&mut self, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
+        if self.library.is_loading(cx) {
             return;
         }
         let entries = self.visible_entries();
-        match entries.get(self.browser.state().cursor) {
+        match entries.get(self.library.browser().state().cursor) {
             Some(BrowserEntry::Artist(index)) => self.play_collection(
-                Collection::Artist(self.browser.state().artists[*index].clone()),
+                Collection::Artist(self.library.browser().state().artists()[*index].clone()),
                 cx,
             ),
             Some(BrowserEntry::Album(index)) => self.play_collection(
-                Collection::Album(self.browser.state().albums[*index].clone()),
+                Collection::Album(self.library.browser().state().albums()[*index].clone()),
                 cx,
             ),
             Some(BrowserEntry::Folder(path)) => self.play_folder(path, cx),
-            _ => match &self.browser.state().page {
+            _ => match &self.library.browser().state().page {
                 Page::Folder(path) => self.play_folder(&path.clone(), cx),
-                Page::Album(_) | Page::Liked => {
-                    self.play(self.browser.state().songs.clone(), 0, cx)
-                }
-                _ => self.play_row(self.browser.state().cursor, cx),
+                Page::Album(_) | Page::Liked => self.play(
+                    self.library
+                        .browser()
+                        .state()
+                        .song_collection()
+                        .cloned()
+                        .unwrap_or_default(),
+                    0,
+                    cx,
+                ),
+                _ => self.play_row(self.library.browser().state().cursor, cx),
             },
         }
     }
@@ -791,11 +779,11 @@ impl PlayerView {
     }
 
     fn play_collection(&mut self, collection: Collection, cx: &mut Context<Self>) {
-        if self.demo {
+        if self.connection.read(cx).session().is_demo() {
             self.play(Arc::default(), 0, cx);
             return;
         }
-        if let Some(client) = self.connection.read(cx).client.clone() {
+        if let Some(client) = self.connection.read(cx).client().cloned() {
             self.collections.update(cx, |collections, cx| {
                 collections.play(client, collection, cx)
             });
@@ -803,20 +791,18 @@ impl PlayerView {
     }
 
     fn play_folder(&mut self, path: &str, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
+        if self.library.is_loading(cx) {
             return;
         }
-        if let Some(library) = self.browser.folder_library() {
+        if let Some(library) = self.library.browser().folder_library() {
             self.play(Arc::new(library.songs_recursive(path)), 0, cx);
         }
     }
 
     fn toggle_like(&mut self, song: Song, cx: &mut Context<Self>) {
-        let client = self.connection.read(cx).client.clone();
-        if self.demo || client.is_some() {
-            self.likes
-                .update(cx, |likes, cx| likes.toggle(client, song, cx));
-        }
+        let session = self.connection.read(cx).session().clone();
+        self.likes
+            .update(cx, |likes, cx| likes.toggle(&session, song, cx));
     }
 
     fn merge_liked(&mut self, cx: &gpui::App) {
@@ -824,8 +810,8 @@ impl PlayerView {
             .likes
             .read(cx)
             .state()
-            .merge_liked(self.browser.state().songs.as_ref().clone());
-        self.browser.replace_songs(songs);
+            .merge_liked(self.library.browser().state().songs().to_vec());
+        self.library.replace_songs(songs);
     }
 
     fn like_button(
@@ -871,14 +857,14 @@ impl PlayerView {
     }
 
     fn next(&mut self, cx: &mut Context<Self>) {
-        if let Some(client) = &self.connection.read(cx).client
+        if let Some(client) = self.connection.read(cx).client()
             && self.transport.next(client)
         {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn previous(&mut self, cx: &mut Context<Self>) {
-        if let Some(client) = &self.connection.read(cx).client
+        if let Some(client) = self.connection.read(cx).client()
             && self.transport.previous(client)
         {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
@@ -888,9 +874,7 @@ impl PlayerView {
         if self.settings.poll() {
             cx.notify();
         }
-        let update = self
-            .transport
-            .poll(self.connection.read(cx).client.as_ref());
+        let update = self.transport.poll(self.connection.read(cx).client());
         if update.track_changed {
             self.playback_changed(CollectionFailurePolicy::Preserve, cx);
         } else if update.changed {
@@ -904,7 +888,7 @@ impl PlayerView {
         }
     }
     fn toggle(&mut self, cx: &mut Context<Self>) {
-        if let Some(client) = &self.connection.read(cx).client
+        if let Some(client) = self.connection.read(cx).client()
             && self.transport.toggle(client)
         {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
@@ -949,10 +933,16 @@ impl PlayerView {
     }
 
     fn title(&self) -> String {
-        match &self.browser.state().page {
-            Page::Artists | Page::Albums | Page::Songs | Page::Liked => {
-                self.browser.state().page.section().info().label.into()
-            }
+        match &self.library.browser().state().page {
+            Page::Artists | Page::Albums | Page::Songs | Page::Liked => self
+                .library
+                .browser()
+                .state()
+                .page
+                .section()
+                .info()
+                .label
+                .into(),
             Page::Search(_) => "Search results".into(),
             Page::Artist(artist) => artist.name.clone(),
             Page::Album(album) => album.name.clone(),
@@ -967,54 +957,54 @@ impl PlayerView {
     }
 
     fn visible_entries(&self) -> Arc<Vec<BrowserEntry>> {
-        self.browser.entries()
+        self.library.browser().entries()
     }
 
     fn entry_song(&self, entry: &BrowserEntry) -> Option<&Song> {
-        self.browser.entry_song(entry)
+        self.library.browser().entry_song(entry)
     }
 
     fn reveal_cursor(&self) {
         self.list_scroll
-            .scroll_to_item(self.browser.state().cursor, ScrollStrategy::Top);
+            .scroll_to_item(self.library.browser().state().cursor, ScrollStrategy::Top);
         self.folder_preview_scroll
             .scroll_to_item(0, ScrollStrategy::Top);
     }
 
     fn cursor_on(&self, row: usize) -> bool {
-        self.keyboard_active && self.browser.state().cursor == row
+        self.keyboard_active && self.library.browser().state().cursor == row
     }
 
     fn section_index(&self) -> usize {
-        self.browser.state().page.section().index()
+        self.library.browser().state().page.section().index()
     }
 
     fn switch_section(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.browser.clear_history();
+        self.library.clear_history();
         self.open_section(Section::from_index(index), cx);
     }
 
     fn open_selected(&mut self, cx: &mut Context<Self>) {
-        if self.library_loader.read(cx).is_loading() {
+        if self.library.is_loading(cx) {
             return;
         }
         let entries = self.visible_entries();
-        let Some(entry) = entries.get(self.browser.state().cursor) else {
+        let Some(entry) = entries.get(self.library.browser().state().cursor) else {
             return;
         };
         match entry {
             BrowserEntry::Artist(i) => self.navigate(
-                Page::Artist(self.browser.state().artists[*i].clone()),
+                Page::Artist(self.library.browser().state().artists()[*i].clone()),
                 true,
                 cx,
             ),
             BrowserEntry::Album(i) => self.navigate(
-                Page::Album(self.browser.state().albums[*i].clone()),
+                Page::Album(self.library.browser().state().albums()[*i].clone()),
                 true,
                 cx,
             ),
             BrowserEntry::Folder(path) => self.navigate(Page::Folder(path.clone()), true, cx),
-            BrowserEntry::Song(_) => self.play_row(self.browser.state().cursor, cx),
+            BrowserEntry::Song(_) => self.play_row(self.library.browser().state().cursor, cx),
         }
     }
 
@@ -1064,7 +1054,7 @@ impl PlayerView {
         let count = self.visible_entries().len();
         let viewport_height =
             f32::from(self.list_scroll.0.borrow().base_handle.bounds().size.height);
-        let row_height = match self.browser.state().page {
+        let row_height = match self.library.browser().state().page {
             Page::Artists => ARTIST_ROW_HEIGHT,
             Page::Albums | Page::Artist(_) => ALBUM_ROW_HEIGHT,
             Page::Folder(_) => FOLDER_ROW_HEIGHT,
@@ -1073,17 +1063,21 @@ impl PlayerView {
         let page = page_items(viewport_height, row_height);
         self.keyboard_active = true;
         match command {
-            Down => self
-                .browser
-                .set_cursor(moved_cursor(self.browser.state().cursor, 1, count)),
-            Up => self
-                .browser
-                .set_cursor(moved_cursor(self.browser.state().cursor, -1, count)),
+            Down => self.library.set_cursor(moved_cursor(
+                self.library.browser().state().cursor,
+                1,
+                count,
+            )),
+            Up => self.library.set_cursor(moved_cursor(
+                self.library.browser().state().cursor,
+                -1,
+                count,
+            )),
             Back => self.back(cx),
             Open => self.open_selected(cx),
             PlaySelection => self.play_selection(cx),
-            First => self.browser.set_cursor(0),
-            Last => self.browser.set_cursor(count.saturating_sub(1)),
+            First => self.library.set_cursor(0),
+            Last => self.library.set_cursor(count.saturating_sub(1)),
             HalfDown | HalfUp | PageDown | PageUp => {
                 let step = if matches!(command, HalfDown | HalfUp) {
                     (page / 2).max(1)
@@ -1095,8 +1089,11 @@ impl PlayerView {
                 } else {
                     step as isize
                 };
-                self.browser
-                    .set_cursor(moved_cursor(self.browser.state().cursor, delta, count));
+                self.library.set_cursor(moved_cursor(
+                    self.library.browser().state().cursor,
+                    delta,
+                    count,
+                ));
             }
             FocusSearch => {
                 self.show_help = false;
@@ -1105,10 +1102,11 @@ impl PlayerView {
             Escape => {
                 if self.show_help {
                     self.show_help = false;
-                } else if matches!(self.browser.state().page, Page::Search(_)) {
+                } else if matches!(self.library.browser().state().page, Page::Search(_)) {
                     self.back(cx);
                 } else {
                     self.failures = Failures::default();
+                    self.library.dismiss_failure();
                     self.collections
                         .update(cx, |collections, _| collections.dismiss_failure());
                     self.likes.update(cx, |likes, _| likes.dismiss_failures());
@@ -1132,7 +1130,7 @@ impl PlayerView {
                     self.transport.queue().current().cloned()
                 } else {
                     self.visible_entries()
-                        .get(self.browser.state().cursor)
+                        .get(self.library.browser().state().cursor)
                         .and_then(|entry| self.entry_song(entry))
                         .cloned()
                 };
@@ -1151,11 +1149,11 @@ impl PlayerView {
             ),
             Help => self.show_help = !self.show_help,
             Refresh => {
-                if !self.library_loader.read(cx).is_loading() {
-                    if matches!(self.browser.state().page, Page::Folder(_)) {
+                if !self.library.is_loading(cx) {
+                    if matches!(self.library.browser().state().page, Page::Folder(_)) {
                         self.refresh_folders(cx);
                     } else {
-                        self.navigate(self.browser.state().page.clone(), false, cx);
+                        self.navigate(self.library.browser().state().page.clone(), false, cx);
                     }
                 }
             }
@@ -1186,7 +1184,7 @@ impl Render for PlayerView {
         }
         // Retain subscriptions for the lifetime of the view.
         let _ = &self.subscriptions;
-        let connected = self.connection.read(cx).client.is_some() || self.demo;
+        let connected = self.connection.read(cx).session().is_active();
         let mut root = div()
             .relative()
             .size_full()
@@ -1239,12 +1237,12 @@ impl Render for PlayerView {
                     cx.notify();
                 }),
             );
-        let content = if matches!(self.browser.state().page, Page::Search(_)) {
+        let content = if matches!(self.library.browser().state().page, Page::Search(_)) {
             self.search_results(cx)
-        } else if self.library_loader.read(cx).is_loading() && !self.browser.state().more {
+        } else if self.library.is_loading(cx) && !self.library.browser().state().more {
             empty_state(colors, "Loading your library…")
         } else {
-            match self.browser.state().page {
+            match self.library.browser().state().page {
                 Page::Artists => self.artists_list(cx),
                 Page::Albums | Page::Artist(_) => self.albums_list(cx),
                 Page::Songs | Page::Liked | Page::Album(_) => self.songs_list(cx),
@@ -1267,7 +1265,7 @@ impl Render for PlayerView {
                     .flex()
                     .flex_col()
                     .when(
-                        !matches!(self.browser.state().page, Page::Folder(_)),
+                        !matches!(self.library.browser().state().page, Page::Folder(_)),
                         |view| view.px_4(),
                     )
                     .child(content),

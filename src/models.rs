@@ -77,10 +77,27 @@ pub fn time_label(seconds: u64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
+pub fn duration_label(seconds: u64) -> String {
+    if seconds == 0 {
+        "--:--".into()
+    } else {
+        time_label(seconds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unknown_duration_is_distinct_from_zero_playback_position() {
+        assert_eq!(duration_label(0), "--:--");
+        assert_eq!(time_label(0), "0:00");
+        assert_eq!(duration_label(1), "0:01");
+        assert_eq!(duration_label(125), "2:05");
+        assert_eq!(duration_label(3601), "60:01");
+    }
 
     #[test]
     fn untagged_songs_do_not_use_shared_unknown_album_artwork() {

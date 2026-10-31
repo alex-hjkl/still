@@ -3,24 +3,19 @@ use super::*;
 impl PlayerView {
     pub(super) fn header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let subtitle = match &self.browser.state().page {
+        let subtitle = match &self.library.browser().state().page {
             Page::Search(_) => {
-                if self
-                    .failures
-                    .iter()
-                    .any(|(operation, _)| *operation == Operation::Library)
-                {
+                if self.library.failure().is_some() {
                     "Search unavailable".into()
-                } else if self.library_loader.read(cx).is_loading() || !self.browser.state().loaded
-                {
+                } else if self.library.is_loading(cx) || !self.library.browser().state().loaded() {
                     "Searching your library…".into()
                 } else {
                     format!(
                         "{} · {} · {}{}",
-                        count_label(self.browser.state().artists.len(), "artist"),
-                        count_label(self.browser.state().albums.len(), "album"),
-                        count_label(self.browser.state().songs.len(), "song"),
-                        if self.browser.state().more {
+                        count_label(self.library.browser().state().artists().len(), "artist"),
+                        count_label(self.library.browser().state().albums().len(), "album"),
+                        count_label(self.library.browser().state().songs().len(), "song"),
+                        if self.library.browser().state().more {
                             " · more available"
                         } else {
                             ""
@@ -28,11 +23,11 @@ impl PlayerView {
                     )
                 }
             }
-            Page::Artists => count_label(self.browser.state().artists.len(), "artist"),
+            Page::Artists => count_label(self.library.browser().state().artists().len(), "artist"),
             Page::Albums => format!(
                 "{}{}",
-                count_label(self.browser.state().albums.len(), "album"),
-                if self.browser.state().more {
+                count_label(self.library.browser().state().albums().len(), "album"),
+                if self.library.browser().state().more {
                     " · more available"
                 } else {
                     ""
@@ -40,26 +35,29 @@ impl PlayerView {
             ),
             Page::Songs => format!(
                 "{}{}",
-                count_label(self.browser.state().songs.len(), "song"),
-                if self.browser.state().more {
+                count_label(self.library.browser().state().songs().len(), "song"),
+                if self.library.browser().state().more {
                     " · more available"
                 } else {
                     ""
                 }
             ),
-            Page::Artist(_) => count_label(self.browser.state().albums.len(), "album"),
-            Page::Liked => count_label(self.browser.state().songs.len(), "liked song"),
+            Page::Artist(_) => count_label(self.library.browser().state().albums().len(), "album"),
+            Page::Liked => count_label(self.library.browser().state().songs().len(), "liked song"),
             Page::Album(album) => format!(
                 "{}{} · {}",
                 album.artist,
                 album.year.map(|y| format!(" · {y}")).unwrap_or_default(),
                 count_label(
-                    album.song_count.max(self.browser.state().songs.len()),
+                    album
+                        .song_count
+                        .max(self.library.browser().state().songs().len()),
                     "song"
                 )
             ),
             Page::Folder(path) => self
-                .browser
+                .library
+                .browser()
                 .folder_library()
                 .and_then(|library| library.folder(path))
                 .map(|folder| {
@@ -75,7 +73,7 @@ impl PlayerView {
         {
             self.ui_probe.borrow_mut().search_summary = subtitle.clone();
         }
-        let title = match &self.browser.state().page {
+        let title = match &self.library.browser().state().page {
             Page::Folder(path) if path.is_empty() => Section::Folders.info().label.to_owned(),
             Page::Folder(path) => {
                 let parts: Vec<_> = path
@@ -120,7 +118,7 @@ impl PlayerView {
                     .gap_3()
                     .child(self.sidebar_toggle(window, cx))
                     .child(self.theme_toggle(cx))
-                    .when(self.browser.has_history(), |view| {
+                    .when(self.library.browser().has_history(), |view| {
                         view.child(
                             toolbar_icon(
                                 colors,
@@ -150,7 +148,7 @@ impl PlayerView {
                                     .text_size(px(TEXT_CAPTION))
                                     .text_color(rgb(colors.muted))
                                     .truncate()
-                                    .child(if self.library_loader.read(cx).is_loading() {
+                                    .child(if self.library.is_loading(cx) {
                                         "Loading…".into()
                                     } else {
                                         subtitle
@@ -158,8 +156,8 @@ impl PlayerView {
                             ),
                     )
                     .when(
-                        matches!(self.browser.state().page, Page::Folder(_))
-                            && !self.library_loader.read(cx).is_loading(),
+                        matches!(self.library.browser().state().page, Page::Folder(_))
+                            && !self.library.is_loading(cx),
                         |view| {
                             view.child(
                                 toolbar_icon(
@@ -173,18 +171,21 @@ impl PlayerView {
                         },
                     )
                     .when(
-                        !self.library_loader.read(cx).is_loading()
-                            && match &self.browser.state().page {
+                        !self.library.is_loading(cx)
+                            && match &self.library.browser().state().page {
                                 Page::Folder(path) => self
-                                    .browser
+                                    .library
+                                    .browser()
                                     .folder_library()
                                     .and_then(|library| library.folder(path))
                                     .is_some_and(|folder| {
                                         !folder.songs.is_empty() || !folder.children.is_empty()
                                     }),
-                                Page::Artist(_) => !self.browser.state().albums.is_empty(),
+                                Page::Artist(_) => {
+                                    !self.library.browser().state().albums().is_empty()
+                                }
                                 Page::Album(_) | Page::Liked => {
-                                    !self.browser.state().songs.is_empty()
+                                    !self.library.browser().state().songs().is_empty()
                                 }
                                 _ => false,
                             },
@@ -194,7 +195,7 @@ impl PlayerView {
                                     colors,
                                     "play-page",
                                     "play",
-                                    match self.browser.state().page {
+                                    match self.library.browser().state().page {
                                         Page::Folder(_) => shortcuts::PLAY_SELECTION
                                             .hint("Play this folder and subfolders"),
                                         Page::Liked => {
@@ -207,13 +208,26 @@ impl PlayerView {
                                 )
                                 .bg(rgb(colors.selected))
                                 .on_click(cx.listener(
-                                    |this, _, _, cx| match &this.browser.state().page {
-                                        Page::Folder(path) => this.play_folder(&path.clone(), cx),
-                                        Page::Artist(artist) => this.play_collection(
-                                            Collection::Artist(artist.clone()),
-                                            cx,
-                                        ),
-                                        _ => this.play(this.browser.state().songs.clone(), 0, cx),
+                                    |this, _, _, cx| {
+                                        match &this.library.browser().state().page {
+                                            Page::Folder(path) => {
+                                                this.play_folder(&path.clone(), cx)
+                                            }
+                                            Page::Artist(artist) => this.play_collection(
+                                                Collection::Artist(artist.clone()),
+                                                cx,
+                                            ),
+                                            _ => this.play(
+                                                this.library
+                                                    .browser()
+                                                    .state()
+                                                    .song_collection()
+                                                    .cloned()
+                                                    .unwrap_or_default(),
+                                                0,
+                                                cx,
+                                            ),
+                                        }
                                     },
                                 )),
                             )
@@ -232,10 +246,7 @@ impl PlayerView {
             return empty_state(colors, "No artists yet");
         }
         uniform_list(
-            (
-                "artists",
-                self.library_loader.read(cx).request_id() as usize,
-            ),
+            ("artists", self.library.request_id(cx) as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -243,7 +254,7 @@ impl PlayerView {
                         let BrowserEntry::Artist(index) = &entries[row] else {
                             unreachable!()
                         };
-                        let artist = this.browser.state().artists[*index].clone();
+                        let artist = this.library.browser().state().artists()[*index].clone();
                         let initial = artist
                             .name
                             .chars()
@@ -294,7 +305,7 @@ impl PlayerView {
                                     move |this, _, window, cx| {
                                         cx.stop_propagation();
                                         window.focus(&this.library_focus);
-                                        this.browser.set_cursor(row);
+                                        this.library.set_cursor(row);
                                         this.play_collection(
                                             Collection::Artist(artist.clone()),
                                             cx,
@@ -304,7 +315,7 @@ impl PlayerView {
                             })
                             .child(icon_sized("forward", colors.muted, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
+                                this.library.set_cursor(row);
                                 this.navigate(Page::Artist(artist.clone()), true, cx)
                             }))
                     })
@@ -325,7 +336,7 @@ impl PlayerView {
             return empty_state(colors, "No albums yet");
         }
         uniform_list(
-            ("albums", self.library_loader.read(cx).request_id() as usize),
+            ("albums", self.library.request_id(cx) as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -333,7 +344,7 @@ impl PlayerView {
                         let BrowserEntry::Album(index) = &entries[row] else {
                             unreachable!()
                         };
-                        let album = this.browser.state().albums[*index].clone();
+                        let album = this.library.browser().state().albums()[*index].clone();
                         track_row(colors, row, ALBUM_ROW_HEIGHT)
                             .when(this.cursor_on(row), |view| {
                                 view.bg(rgb(colors.selected))
@@ -342,7 +353,7 @@ impl PlayerView {
                             })
                             .child(artwork(
                                 colors,
-                                this.connection.read(cx).client.as_ref(),
+                                this.connection.read(cx).client(),
                                 album.cover_art.as_deref(),
                                 44.,
                             ))
@@ -391,14 +402,14 @@ impl PlayerView {
                                     move |this, _, window, cx| {
                                         cx.stop_propagation();
                                         window.focus(&this.library_focus);
-                                        this.browser.set_cursor(row);
+                                        this.library.set_cursor(row);
                                         this.play_collection(Collection::Album(album.clone()), cx);
                                     },
                                 ))
                             })
                             .child(icon_sized("forward", colors.muted, 16.))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
+                                this.library.set_cursor(row);
                                 this.navigate(Page::Album(album.clone()), true, cx)
                             }))
                     })
@@ -418,7 +429,7 @@ impl PlayerView {
         if entries.is_empty() {
             return empty_state(
                 colors,
-                if matches!(self.browser.state().page, Page::Liked) {
+                if matches!(self.library.browser().state().page, Page::Liked) {
                     "Click ♡ next to a song to add it here"
                 } else {
                     "No songs yet"
@@ -426,7 +437,7 @@ impl PlayerView {
             );
         }
         let list = uniform_list(
-            ("songs", self.library_loader.read(cx).request_id() as usize),
+            ("songs", self.library.request_id(cx) as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -503,7 +514,10 @@ impl PlayerView {
                                     ),
                             )
                             .when(
-                                matches!(this.browser.state().page, Page::Songs | Page::Liked),
+                                matches!(
+                                    this.library.browser().state().page,
+                                    Page::Songs | Page::Liked
+                                ),
                                 |view| {
                                     view.child(
                                         div()
@@ -522,10 +536,10 @@ impl PlayerView {
                                     .flex_shrink_0()
                                     .text_size(px(TEXT_SECONDARY))
                                     .text_color(rgb(colors.muted))
-                                    .child(time_label(song.duration)),
+                                    .child(duration_label(song.duration)),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.browser.set_cursor(row);
+                                this.library.set_cursor(row);
                                 this.play_row(row, cx)
                             }))
                     })
@@ -559,7 +573,10 @@ impl PlayerView {
                     .child(div().w(px(24.)).child("#"))
                     .child(div().flex_1().min_w_0().child("Title"))
                     .when(
-                        matches!(self.browser.state().page, Page::Songs | Page::Liked),
+                        matches!(
+                            self.library.browser().state().page,
+                            Page::Songs | Page::Liked
+                        ),
                         |view| view.child(div().w(relative(0.3)).child("Album")),
                     )
                     .child(div().w(px(32.)))

@@ -47,10 +47,11 @@ impl PlayerView {
     pub(super) fn reset_folder_columns(&mut self) {
         self.folder_parent_scroll = UniformListScrollHandle::new();
         self.folder_preview_scroll = UniformListScrollHandle::new();
-        if let Page::Folder(path) = &self.browser.state().page
+        if let Page::Folder(path) = &self.library.browser().state().page
             && let Some(parent) = parent_path(path)
             && let Some(row) = self
-                .browser
+                .library
+                .browser()
                 .folder_entries(parent)
                 .iter()
                 .position(|entry| matches!(entry, BrowserEntry::Folder(child) if child == path))
@@ -63,16 +64,16 @@ impl PlayerView {
 
     pub(super) fn folder_columns(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let Page::Folder(path) = &self.browser.state().page else {
+        let Page::Folder(path) = &self.library.browser().state().page else {
             unreachable!();
         };
-        if self.browser.folder_library().is_none() {
+        if self.library.browser().folder_library().is_none() {
             return empty_state(colors, "Folders have not been loaded yet");
         }
         let parent = parent_path(path)
             .map(|parent| self.folder_column(parent, Column::Parent, Some(path), cx));
-        let entries = self.browser.entries();
-        let preview = match entries.get(self.browser.state().cursor) {
+        let entries = self.library.browser().entries();
+        let preview = match entries.get(self.library.browser().state().cursor) {
             Some(BrowserEntry::Folder(child)) => {
                 self.folder_column(child, Column::Preview, None, cx)
             }
@@ -136,9 +137,9 @@ impl PlayerView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let entries = self.browser.folder_entries(path);
+        let entries = self.library.browser().folder_entries(path);
         let selected = if column == Column::Current {
-            Some(self.browser.state().cursor)
+            Some(self.library.browser().state().cursor)
         } else {
             child.and_then(|child| {
                 entries
@@ -180,7 +181,11 @@ impl PlayerView {
                 id,
                 entries.len(),
                 cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    let library = this.browser.folder_library().expect("loaded folders");
+                    let library = this
+                        .library
+                        .browser()
+                        .folder_library()
+                        .expect("loaded folders");
                     let folder = library.folder(&path).expect("existing folder");
                     range
                         .map(|row| {
@@ -263,7 +268,7 @@ impl PlayerView {
                                             cx.listener(move |this, _, window, cx| {
                                                 cx.stop_propagation();
                                                 window.focus(&this.library_focus);
-                                                this.browser.set_cursor(row);
+                                                this.library.set_cursor(row);
                                                 this.play_folder(&child, cx);
                                             }),
                                         ),
@@ -271,7 +276,7 @@ impl PlayerView {
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.remember_folder(cx);
-                                    if this.browser.focus_folder_entry(&path, &selected_entry) {
+                                    if this.library.focus_folder_entry(&path, &selected_entry, cx) {
                                         this.reset_navigation_ui(cx);
                                         this.open_selected(cx);
                                         this.remember_folder(cx);
@@ -302,16 +307,12 @@ impl PlayerView {
         } else {
             song.duration
         };
-        let duration_label = if duration > 0 {
-            time_label(duration)
-        } else {
-            "--:--".into()
-        };
+        let duration_text = duration_label(duration);
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().preview_song = Some(song.id.clone());
         }
-        let row = self.browser.state().cursor;
+        let row = self.library.browser().state().cursor;
         div()
             .flex_1()
             .min_w_0()
@@ -331,7 +332,7 @@ impl PlayerView {
                     .gap_4()
                     .child(artwork(
                         colors,
-                        self.connection.read(cx).client.as_ref(),
+                        self.connection.read(cx).client(),
                         song.artwork_id(),
                         96.,
                     ))
@@ -365,9 +366,9 @@ impl PlayerView {
                             .text_color(rgb(colors.muted))
                             .whitespace_normal()
                             .child(if song.album.is_empty() {
-                                duration_label
+                                duration_text
                             } else {
-                                format!("{} · {}", song.album, duration_label)
+                                format!("{} · {}", song.album, duration_text)
                             }),
                     )
                     .child(

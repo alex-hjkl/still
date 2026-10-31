@@ -88,7 +88,11 @@ Retry preservation on auto-advance. The search check replaces an in-flight reque
 releases its delayed error after the replacement starts, submits immediately with
 Enter and returns to cached results. Reports and logs stay in ignored
 `.local/ui-test-results/linux-*` directories. No real saved connection or
-library is used. The scenario does not exercise credential-store persistence
+library is used. Two additional launches exercise the explicit demo session
+(including local likes, search and disconnect) and the disconnected form.
+Both use fresh preferences and a partial synthetic environment connection to
+disable saved-login restoration without providing a server URL or password.
+The scenario does not exercise credential-store persistence
 or native system media keys. It is a local interactive-desktop check, not a
 headless CI job. `--no-build` reuses a binary already built with `ui-tests`;
 `--hold-seconds 10` leaves time for visual inspection before the first quit.

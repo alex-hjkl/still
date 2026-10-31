@@ -3,7 +3,7 @@ use super::*;
 impl PlayerView {
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let hints = shortcuts::footer_hints(&self.browser.state().page);
+        let hints = shortcuts::footer_hints(&self.library.browser().state().page);
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().footer_hints = hints
@@ -66,14 +66,14 @@ impl PlayerView {
             .text_size(px(TEXT_CAPTION))
             .text_color(rgb(colors.muted))
             .child(hints)
-            .when(self.browser.state().more, |view| {
+            .when(self.library.browser().state().more, |view| {
                 view.child(
                     div()
                         .id("load-more")
                         .flex_shrink_0()
                         .cursor_pointer()
                         .text_color(rgb(colors.accent))
-                        .child(if self.library_loader.read(cx).is_loading() {
+                        .child(if self.library.is_loading(cx) {
                             "Loading…".to_owned()
                         } else {
                             shortcuts::MORE.hint(shortcuts::MORE.label)

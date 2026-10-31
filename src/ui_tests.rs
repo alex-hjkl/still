@@ -234,7 +234,7 @@ struct Snapshot {
 
 impl Snapshot {
     fn read(view: &PlayerView, window: &Window, cx: &gpui::App) -> Self {
-        let state = view.browser.state();
+        let state = view.library.browser().state();
         let page = match state.page {
             Page::Artists => "artists",
             Page::Albums => "albums",
@@ -246,24 +246,26 @@ impl Snapshot {
             Page::Search(_) => "search",
         };
         let selected = view
-            .browser
+            .library
+            .browser()
             .entries()
             .get(state.cursor)
             .map(|entry| match entry {
                 BrowserEntry::Folder(path) => path.clone(),
                 BrowserEntry::Song(_) => view
-                    .browser
+                    .library
+                    .browser()
                     .entry_song(entry)
                     .map(|song| song.id.clone())
                     .unwrap_or_default(),
-                BrowserEntry::Artist(index) => state.artists[*index].id.clone(),
-                BrowserEntry::Album(index) => state.albums[*index].id.clone(),
+                BrowserEntry::Artist(index) => state.artists()[*index].id.clone(),
+                BrowserEntry::Album(index) => state.albums()[*index].id.clone(),
             })
             .unwrap_or_default();
         let scroll = view.list_scroll.0.borrow();
         let height = f32::from(scroll.base_handle.bounds().size.height);
         let row = scroll.last_item_size.map_or(0., |size| {
-            f32::from(size.contents.height) / view.browser.entries().len().max(1) as f32
+            f32::from(size.contents.height) / view.library.browser().entries().len().max(1) as f32
         });
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
@@ -296,9 +298,9 @@ impl Snapshot {
             media_title,
             media_state,
             media_position,
-            connected: view.connection.read(cx).client.is_some() || view.demo,
-            loaded: state.loaded && !view.library_loader.read(cx).is_loading(),
-            library_loading: view.library_loader.read(cx).is_loading(),
+            connected: view.connection.read(cx).session().is_active(),
+            loaded: state.loaded() && !view.library.is_loading(cx),
+            library_loading: view.library.is_loading(cx),
             show_help: view.show_help,
             volume: view.settings.value().volume,
             shuffle: view.transport.queue().is_shuffled(),
@@ -314,7 +316,11 @@ impl Snapshot {
                 Page::Search(query) => query.clone(),
                 _ => String::new(),
             },
-            search_counts: [state.artists.len(), state.albums.len(), state.songs.len()],
+            search_counts: [
+                state.artists().len(),
+                state.albums().len(),
+                state.songs().len(),
+            ],
             rendered: view.ui_probe.borrow().clone(),
             sidebar_width: view.ui_probe.borrow().sidebar_width,
             size: [

@@ -29,6 +29,27 @@ def scenario(launch, tracks):
     def expect(**values):
         return dict(action="expect", **values)
 
+    if launch == 2:
+        return [
+            expect(connected=True, loaded=True, page="artists", volume_slider=0.7, seek_enabled=False),
+            key("cmd-3"), expect(page="songs", loaded=True, selected="demo-0-0"),
+            key("f"), key("cmd-5"), expect(page="liked", loaded=True, selected="demo-0-1", failures=[]),
+            key("f"), expect(selected="", failures=[]),
+            key("cmd-3"), key("f"), key("cmd-5"), expect(page="liked", loaded=True, selected="demo-0-0"),
+            key("cmd-3"), key("/"), dict(action="text", text="Drift"),
+            expect(page="search", loaded=True, search="Drift", search_counts=[0, 0, 10]),
+            key("enter"), key("escape"), expect(page="songs", loaded=True),
+            dict(action="disconnect"), expect(connected=False, focus="password", seek_enabled=False),
+            dict(action="quit"),
+        ]
+    if launch == 3:
+        return [
+            expect(connected=False, focus="server", volume_slider=0.7, seek_enabled=False),
+            dict(action="theme_menu"), expect(theme_menu=True, theme_menu_fits=True),
+            key("escape"), expect(theme_menu=False, focus="server"),
+            key("tab"), expect(focus="username"), key("tab"), expect(focus="password"),
+            dict(action="quit"),
+        ]
     if launch == 1:
         return [expect(connected=True, loaded=True, page="songs", search="", shuffle=True,
                        volume=0.65, volume_slider=0.65, seek_enabled=False,
@@ -236,7 +257,13 @@ def main():
                NAVIDROME_USERNAME="fixture", NAVIDROME_PASSWORD="fixture",
                STILL_CONFIG_DIR=str(report / "config"), STILL_LOG_DIR=str(report / "logs"))
     try:
-        for launch in range(2):
+        for launch in range(4):
+            if launch >= 2:
+                # A partial synthetic environment connection disables saved-login
+                # restoration without supplying a server to either startup check.
+                env.pop("NAVIDROME_URL", None)
+                env.pop("NAVIDROME_PASSWORD", None)
+                env["STILL_CONFIG_DIR"] = str(report / f"startup-config-{launch}")
             steps = scenario(launch, tracks)
             if launch == 0 and args.hold_seconds:
                 steps.insert(-1, dict(action="wait", milliseconds=args.hold_seconds * 1000))
@@ -245,7 +272,8 @@ def main():
             script.write_text(json.dumps(steps, ensure_ascii=False), encoding="utf-8")
             env.update(STILL_UI_TEST_SCRIPT=str(script), STILL_UI_TEST_RESULT=str(result))
             with (report / f"app-{launch}.log").open("wb") as log:
-                process = subprocess.Popen([str(binary)], cwd=ROOT, env=env, stdout=log, stderr=log)
+                command = [str(binary), *(["--demo"] if launch == 2 else [])]
+                process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log, stderr=log)
                 print(f"Linux {args.backend} launch {launch + 1}: PID {process.pid}; reports: {report}", flush=True)
                 try:
                     status = process.wait(timeout=args.timeout + args.hold_seconds)
