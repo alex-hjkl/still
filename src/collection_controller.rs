@@ -153,6 +153,8 @@ mod tests {
         controller.pending = Some(album());
         controller.finish(request, Err(anyhow::anyhow!("fixture failure")));
         assert!(controller.pending().is_none());
+        // Observing a transport change cancels work while keeping Retry useful.
+        controller.cancel_pending();
         assert!(matches!(
             controller
                 .failure()
@@ -160,6 +162,13 @@ mod tests {
             Some(RetryAction::Collection(_))
         ));
         controller.dismiss_failure();
+        assert!(controller.failure().is_none());
+
+        let (request, _) = controller.requests.start();
+        controller.pending = Some(album());
+        controller.finish(request, Err(anyhow::anyhow!("fixture failure")));
+        // An explicit new playback request dismisses the previous collection error.
+        controller.cancel();
         assert!(controller.failure().is_none());
     }
 }

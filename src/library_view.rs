@@ -11,7 +11,8 @@ impl PlayerView {
                     .any(|(operation, _)| *operation == Operation::Library)
                 {
                     "Search unavailable".into()
-                } else if self.browser.is_loading() || !self.browser.state().loaded {
+                } else if self.library_loader.read(cx).is_loading() || !self.browser.state().loaded
+                {
                     "Searching your library…".into()
                 } else {
                     format!(
@@ -149,7 +150,7 @@ impl PlayerView {
                                     .text_size(px(TEXT_CAPTION))
                                     .text_color(rgb(colors.muted))
                                     .truncate()
-                                    .child(if self.browser.is_loading() {
+                                    .child(if self.library_loader.read(cx).is_loading() {
                                         "Loading…".into()
                                     } else {
                                         subtitle
@@ -158,7 +159,7 @@ impl PlayerView {
                     )
                     .when(
                         matches!(self.browser.state().page, Page::Folder(_))
-                            && !self.browser.is_loading(),
+                            && !self.library_loader.read(cx).is_loading(),
                         |view| {
                             view.child(
                                 toolbar_icon(
@@ -172,7 +173,7 @@ impl PlayerView {
                         },
                     )
                     .when(
-                        !self.browser.is_loading()
+                        !self.library_loader.read(cx).is_loading()
                             && match &self.browser.state().page {
                                 Page::Folder(path) => self
                                     .browser
@@ -231,7 +232,10 @@ impl PlayerView {
             return empty_state(colors, "No artists yet");
         }
         uniform_list(
-            ("artists", self.browser.request_id() as usize),
+            (
+                "artists",
+                self.library_loader.read(cx).request_id() as usize,
+            ),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -321,7 +325,7 @@ impl PlayerView {
             return empty_state(colors, "No albums yet");
         }
         uniform_list(
-            ("albums", self.browser.request_id() as usize),
+            ("albums", self.library_loader.read(cx).request_id() as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -422,7 +426,7 @@ impl PlayerView {
             );
         }
         let list = uniform_list(
-            ("songs", self.browser.request_id() as usize),
+            ("songs", self.library_loader.read(cx).request_id() as usize),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range

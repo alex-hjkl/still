@@ -153,9 +153,11 @@ struct Expected {
     connected: Option<bool>,
     failures: Option<Vec<String>>,
     loaded: Option<bool>,
+    library_loading: Option<bool>,
     show_help: Option<bool>,
     search_summary: Option<String>,
     volume: Option<f32>,
+    volume_slider: Option<f32>,
     shuffle: Option<bool>,
     page: Option<String>,
     path: Option<String>,
@@ -187,6 +189,7 @@ struct Expected {
     duration: Option<u64>,
     seek_enabled: Option<bool>,
     seek_progress_min: Option<f32>,
+    seek_progress_max: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -200,8 +203,10 @@ struct Snapshot {
     connection_scroll_y: f32,
     connected: bool,
     loaded: bool,
+    library_loading: bool,
     show_help: bool,
     volume: f32,
+    volume_slider: f32,
     shuffle: bool,
     page: String,
     path: String,
@@ -263,7 +268,9 @@ impl Snapshot {
         let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         let (seek_progress, seek_enabled) = view.seek_slider.read(cx).test_state();
+        let (volume_slider, _) = view.volume_slider.read(cx).test_state();
         Self {
+            volume_slider,
             duration: view.transport.duration(),
             seek_progress,
             seek_enabled,
@@ -290,7 +297,8 @@ impl Snapshot {
             media_state,
             media_position,
             connected: view.connection.read(cx).client.is_some() || view.demo,
-            loaded: state.loaded && !view.browser.is_loading(),
+            loaded: state.loaded && !view.library_loader.read(cx).is_loading(),
+            library_loading: view.library_loader.read(cx).is_loading(),
             show_help: view.show_help,
             volume: view.settings.value().volume,
             shuffle: view.transport.queue().is_shuffled(),
@@ -386,6 +394,7 @@ impl Snapshot {
                 .as_ref()
                 .is_none_or(|failures| &self.rendered.failures == failures)
             && field!(loaded)
+            && field!(library_loading)
             && field!(show_help)
             && expected
                 .search_summary
@@ -395,6 +404,9 @@ impl Snapshot {
             && expected
                 .volume
                 .is_none_or(|volume| (self.volume - volume).abs() < 0.001)
+            && expected
+                .volume_slider
+                .is_none_or(|volume| (self.volume_slider - volume).abs() < 0.001)
             && field!(page)
             && field!(path)
             && field!(selected)
@@ -430,6 +442,9 @@ impl Snapshot {
             && expected
                 .seek_progress_min
                 .is_none_or(|min| self.seek_progress >= min)
+            && expected
+                .seek_progress_max
+                .is_none_or(|max| self.seek_progress <= max)
             && field!(media_title)
             && field!(media_state)
             && expected

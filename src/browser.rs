@@ -2,7 +2,6 @@ use crate::{
     folders::{FolderLibrary, parent_path},
     models::{Album, Artist, PAGE_SIZE, SearchResults, Song},
     navigation::Section,
-    requests::{Cancellation, Requests},
     settings::{FolderSelection, SavedFolder},
 };
 use std::{collections::HashMap, sync::Arc};
@@ -97,8 +96,6 @@ pub struct Browser {
     history: Vec<PageState>,
     folder_library: Option<Arc<FolderLibrary>>,
     folder_states: HashMap<String, PageState>,
-    loading: bool,
-    requests: Requests,
 }
 
 impl Default for Browser {
@@ -108,8 +105,6 @@ impl Default for Browser {
             history: Vec::new(),
             folder_library: None,
             folder_states: HashMap::new(),
-            loading: false,
-            requests: Requests::default(),
         }
     }
 }
@@ -174,33 +169,12 @@ impl Browser {
     pub fn folder_library(&self) -> Option<&Arc<FolderLibrary>> {
         self.folder_library.as_ref()
     }
-    pub fn is_loading(&self) -> bool {
-        self.loading
-    }
     pub fn has_history(&self) -> bool {
         !self.history.is_empty()
             || matches!(&self.state.page, Page::Folder(path) if parent_path(path).is_some())
     }
     pub fn clear_history(&mut self) {
         self.history.clear();
-    }
-    pub fn request_id(&self) -> u64 {
-        self.requests.id()
-    }
-    pub fn invalidate_requests(&mut self) {
-        self.requests.invalidate();
-        self.loading = false;
-    }
-    pub fn start_load(&mut self) -> (u64, Cancellation) {
-        self.loading = true;
-        self.requests.start()
-    }
-    pub fn finish_load(&mut self, id: u64) -> bool {
-        if !self.requests.is_current(id) {
-            return false;
-        }
-        self.loading = false;
-        true
     }
     pub fn set_cursor(&mut self, row: usize) {
         self.state.cursor = row;
@@ -228,8 +202,6 @@ impl Browser {
     }
 
     pub fn clear(&mut self) {
-        self.requests.invalidate();
-        self.loading = false;
         self.state = PageState::new(Page::Artists);
         self.history.clear();
         self.folder_library = None;
@@ -237,8 +209,6 @@ impl Browser {
     }
 
     pub fn navigate(&mut self, page: Page, remember: bool) {
-        self.requests.invalidate();
-        self.loading = false;
         if self.folder_library.is_some()
             && let Page::Folder(path) = &self.state.page
         {
@@ -278,8 +248,6 @@ impl Browser {
         let Some(state) = self.history.pop() else {
             return false;
         };
-        self.requests.invalidate();
-        self.loading = false;
         self.state = state;
         self.rebuild_entries();
         true
@@ -293,7 +261,7 @@ impl Browser {
     }
 
     pub fn more_request(&self) -> Option<LibraryRequest> {
-        if self.loading || !self.state.more {
+        if !self.state.more {
             return None;
         }
         let offset = match self.state.page {
@@ -383,7 +351,6 @@ impl Browser {
             return false;
         }
         *query = text;
-        self.invalidate_requests();
         self.state.artists = Arc::default();
         self.state.albums = Arc::default();
         self.state.songs = Arc::default();
@@ -507,8 +474,6 @@ impl Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Navidrome;
-    use crate::failure::{Failure, RetryAction};
     use serde_json::json;
 
     #[test]
@@ -550,13 +515,20 @@ mod tests {
     }
 
     #[test]
-    fn changing_search_rejects_old_requests_and_ignores_empty_updates() {
+    fn changing_search_clears_results_and_ignores_empty_updates() {
         let mut browser = Browser::default();
         browser.navigate(Page::Search("old".into()), true);
-        let (old_id, old_cancel) = browser.start_load();
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                songs: vec![song(0)],
+                albums: vec![album(0)],
+                ..Default::default()
+            }),
+            false,
+        );
         assert!(browser.set_search("Музыка 🎵".into()));
-        assert!(old_cancel.check().is_err());
-        assert!(!browser.finish_load(old_id));
+        assert!(!browser.state().loaded);
+        assert!(browser.entries().is_empty());
         browser.apply(
             LibraryData::Search(SearchResults {
                 songs: vec![song(0)],
@@ -593,14 +565,11 @@ mod tests {
     }
 
     #[test]
-    fn leaving_search_restores_source_selection_and_rejects_inflight_results() {
+    fn leaving_search_restores_source_selection() {
         let mut browser = folder_browser();
         browser.set_cursor(1);
         browser.navigate(Page::Search("piano".into()), true);
-        let (request_id, cancellation) = browser.start_load();
         assert!(browser.back());
-        assert!(cancellation.check().is_err());
-        assert!(!browser.finish_load(request_id));
         assert!(matches!(&browser.state.page, Page::Folder(path) if path == "/music"));
         assert!(browser.state.loaded);
         assert_eq!(
@@ -791,12 +760,8 @@ mod tests {
         browser.state.cursor = 250;
         let albums = browser.state.albums.clone();
         browser.navigate(Page::Album(album(250)), true);
-        let (_, cancellation) = browser.requests.start();
-        browser.loading = true;
 
         assert!(browser.back());
-        assert!(cancellation.check().is_err());
-        assert!(!browser.loading);
         assert!(browser.state.loaded);
         assert!(Arc::ptr_eq(&browser.state.albums, &albums));
         assert_eq!(browser.state.albums.len(), 400);
@@ -853,62 +818,9 @@ mod tests {
     fn back_to_an_unfinished_page_requires_a_new_load() {
         let mut browser = Browser::default();
         browser.navigate(Page::Albums, false);
-        let (_, cancellation) = browser.requests.start();
-        browser.loading = true;
         browser.navigate(Page::Songs, true);
-        assert!(cancellation.check().is_err());
         assert!(browser.back());
         assert!(!browser.state.loaded);
         assert!(matches!(browser.request().page, Page::Albums));
-    }
-
-    #[test]
-    fn retry_fetches_the_failed_page_over_http_and_keeps_existing_results() {
-        use crate::test_http::{Response, Server};
-        for page in [Page::Songs, Page::Albums] {
-            let songs = matches!(page, Page::Songs);
-            let method = if songs { "search3" } else { "getAlbumList2" };
-            let offset = if songs { "songOffset" } else { "offset" };
-            let success = if songs {
-                json!({"searchResult3":{"song":[{"id":"last", "title":"Track 200"}]}})
-            } else {
-                json!({"albumList2":{"album":[{"id":"last", "name":"Альбом 200"}]}})
-            };
-            let server = Server::new([
-                Response::subsonic(method, json!({"status":"failed", "error":{"code":50}}))
-                    .query(offset, 200),
-                Response::subsonic(method, success).query(offset, 200),
-            ]);
-            let client = Navidrome::new(&server.url, "user", "pass").unwrap();
-            let mut browser = Browser::default();
-            browser.navigate(page, false);
-            let data = if songs {
-                LibraryData::Songs((0..200).map(song).collect())
-            } else {
-                LibraryData::Albums((0..200).map(album).collect())
-            };
-            browser.apply(data, false);
-            browser.state.cursor = 175;
-            let request = browser.more_request().unwrap();
-            let result = request.run(client.clone(), &Cancellation::default());
-            let failure = Failure::new(
-                result.err().unwrap().to_string(),
-                RetryAction::Library(request),
-            );
-            let Some(RetryAction::Library(retry)) = failure.retry else {
-                panic!("library retry");
-            };
-            let data = retry.run(client, &Cancellation::default()).unwrap();
-            browser.apply(data, retry.offset > 0);
-            assert_eq!(browser.entries().len(), 201);
-            assert_eq!(browser.state.cursor, 175);
-            assert!(!browser.state.more);
-            if songs {
-                assert_eq!(browser.state.songs[200].id, "last");
-            } else {
-                assert_eq!(browser.state.albums[200].id, "last");
-            }
-            server.finish();
-        }
     }
 }

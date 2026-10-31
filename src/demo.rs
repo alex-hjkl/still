@@ -2,7 +2,6 @@ use super::{Album, Artist, FolderLibrary, LibraryData, Page, PlayerView, Song};
 
 impl PlayerView {
     pub(super) fn load_demo_page(&mut self, cx: &gpui::App) {
-        self.browser.invalidate_requests();
         let mut data = match self.browser.state().page.clone() {
             Page::Search(query) => {
                 let query = query.trim().to_lowercase();

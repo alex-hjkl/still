@@ -34,12 +34,12 @@ impl PlayerView {
             self.load_demo_page(cx);
             return;
         }
-        let request_id = self.browser.request_id();
+        let request_id = self.library_loader.read(cx).request_id();
         let timer = cx.background_executor().timer(Duration::from_millis(250));
         self.search_delay = Some(cx.spawn(async move |this, cx| {
             timer.await;
             let _ = this.update(cx, |this, cx| {
-                if this.browser.request_id() == request_id {
+                if this.library_loader.read(cx).request_id() == request_id {
                     this.submit_search(cx);
                 }
             });
@@ -49,7 +49,7 @@ impl PlayerView {
     pub(super) fn submit_search(&mut self, cx: &mut Context<Self>) {
         if matches!(self.browser.state().page, Page::Search(_))
             && !self.browser.state().loaded
-            && !self.browser.is_loading()
+            && !self.library_loader.read(cx).is_loading()
         {
             self.search_delay = None;
             self.load(self.browser.request(), cx);
@@ -74,7 +74,10 @@ impl PlayerView {
             return empty_state(colors, message);
         }
         uniform_list(
-            ("search-results", self.browser.request_id() as usize),
+            (
+                "search-results",
+                self.library_loader.read(cx).request_id() as usize,
+            ),
             entries.len(),
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range

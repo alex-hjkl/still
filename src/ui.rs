@@ -72,6 +72,11 @@ enum FailureTarget {
     Operation(Operation),
 }
 
+enum CollectionFailurePolicy {
+    Preserve,
+    Dismiss,
+}
+
 pub struct PlayerView {
     connection: Entity<ConnectionController>,
     browser: Browser,
@@ -342,6 +347,8 @@ impl PlayerView {
             demo_hint: None,
             demo,
         };
+        view.sync_seek_slider(cx);
+        view.sync_volume_slider(cx);
         if demo {
             view.open_section(view.settings.value().last_section, cx);
         } else if !view.server.read(cx).value().is_empty()
@@ -384,6 +391,7 @@ impl PlayerView {
         self.cancel_collection(cx);
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
+        self.sync_seek_slider(cx);
         self.connection
             .update(cx, |connection, cx| connection.disconnect(cx));
         self.demo = false;
@@ -558,31 +566,24 @@ impl PlayerView {
         let Some(client) = self.connection.read(cx).client.clone() else {
             return;
         };
-        let (request_id, cancellation) = self.browser.start_load();
         self.failures.clear(&Operation::Library);
         let context = LoadContext {
-            request_id,
             request,
             like_revision: self.likes.read(cx).state().revision(),
             playback_generation: self.transport.generation(),
         };
-        self.library_loader.update(cx, |loader, cx| {
-            loader.start(client, context, cancellation, cx)
-        });
+        self.library_loader
+            .update(cx, |loader, cx| loader.start(client, context, cx));
         cx.notify();
     }
 
     fn accept_library(&mut self, outcome: LoadOutcome, cx: &mut Context<Self>) {
         let LoadOutcome { context, result } = outcome;
         let LoadContext {
-            request_id,
             request,
             like_revision,
             playback_generation,
         } = context;
-        if !self.browser.finish_load(request_id) {
-            return;
-        }
         match result {
             Ok(mut data) => {
                 if matches!(self.browser.state().page, Page::Liked)
@@ -605,13 +606,16 @@ impl PlayerView {
                 Failure::new(format!("{error:#}"), RetryAction::Library(request)),
             ),
         }
-        if self.transport.generation() == playback_generation || !self.follow_current_track() {
+        if self.transport.generation() == playback_generation || !self.follow_current_track(cx) {
             self.reveal_cursor();
         }
         cx.notify();
     }
 
     fn load_more(&mut self, cx: &mut Context<Self>) {
+        if self.library_loader.read(cx).is_loading() {
+            return;
+        }
         if let Some(request) = self.browser.more_request() {
             self.load(request, cx);
         }
@@ -626,7 +630,7 @@ impl PlayerView {
     }
 
     fn refresh_folders(&mut self, cx: &mut Context<Self>) {
-        if self.browser.is_loading() {
+        if self.library_loader.read(cx).is_loading() {
             return;
         }
         self.browser.clear_folders();
@@ -653,7 +657,7 @@ impl PlayerView {
                 }
             }
             FailureTarget::Operation(operation) => {
-                if operation == Operation::Library && self.browser.is_loading() {
+                if operation == Operation::Library && self.library_loader.read(cx).is_loading() {
                     return;
                 }
                 let action = self
@@ -687,26 +691,48 @@ impl PlayerView {
         if let Some(client) = &self.connection.read(cx).client
             && self.transport.play(client, queue, index)
         {
-            self.playback_changed(cx);
+            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn play_current(&mut self, cx: &mut Context<Self>) {
         if let Some(client) = &self.connection.read(cx).client
             && self.transport.restart(client)
         {
-            self.playback_changed(cx);
+            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
-    fn playback_changed(&mut self, cx: &mut Context<Self>) {
-        self.cancel_collection(cx);
+    fn playback_changed(
+        &mut self,
+        collection_failure: CollectionFailurePolicy,
+        cx: &mut Context<Self>,
+    ) {
+        self.collections
+            .update(cx, |collections, _| match collection_failure {
+                CollectionFailurePolicy::Preserve => collections.cancel_pending(),
+                CollectionFailurePolicy::Dismiss => collections.cancel(),
+            });
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
+        self.sync_seek_slider(cx);
         self.failures.clear(&Operation::Playback);
-        self.follow_current_track();
+        self.follow_current_track(cx);
         cx.notify();
     }
 
-    fn follow_current_track(&mut self) -> bool {
-        if self.show_help || self.browser.is_loading() {
+    fn sync_seek_slider(&self, cx: &mut Context<Self>) {
+        let duration = self.transport.duration();
+        let enabled = self.transport.queue().current().is_some() && duration > 0;
+        let progress = if enabled {
+            self.transport.state().position.as_secs_f32() / duration as f32
+        } else {
+            0.
+        };
+        self.seek_slider.update(cx, |slider, cx| {
+            slider.configure(progress, enabled, Some(duration), cx)
+        });
+    }
+
+    fn follow_current_track(&mut self, cx: &gpui::App) -> bool {
+        if self.show_help || self.library_loader.read(cx).is_loading() {
             return false;
         }
         let Some(song) = self.transport.queue().current() else {
@@ -725,7 +751,7 @@ impl PlayerView {
     }
 
     fn play_row(&mut self, row: usize, cx: &mut Context<Self>) {
-        if self.browser.is_loading() {
+        if self.library_loader.read(cx).is_loading() {
             return;
         }
         if let Some((songs, index)) = self.browser.selected_queue(row) {
@@ -735,7 +761,7 @@ impl PlayerView {
     }
 
     fn play_selection(&mut self, cx: &mut Context<Self>) {
-        if self.browser.is_loading() {
+        if self.library_loader.read(cx).is_loading() {
             return;
         }
         let entries = self.visible_entries();
@@ -777,7 +803,7 @@ impl PlayerView {
     }
 
     fn play_folder(&mut self, path: &str, cx: &mut Context<Self>) {
-        if self.browser.is_loading() {
+        if self.library_loader.read(cx).is_loading() {
             return;
         }
         if let Some(library) = self.browser.folder_library() {
@@ -848,14 +874,14 @@ impl PlayerView {
         if let Some(client) = &self.connection.read(cx).client
             && self.transport.next(client)
         {
-            self.playback_changed(cx);
+            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn previous(&mut self, cx: &mut Context<Self>) {
         if let Some(client) = &self.connection.read(cx).client
             && self.transport.previous(client)
         {
-            self.playback_changed(cx);
+            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn tick(&mut self, cx: &mut Context<Self>) {
@@ -866,11 +892,9 @@ impl PlayerView {
             .transport
             .poll(self.connection.read(cx).client.as_ref());
         if update.track_changed {
-            self.collections
-                .update(cx, |collections, _| collections.cancel_pending());
-            self.failures.clear(&Operation::Playback);
-            self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
-            self.follow_current_track();
+            self.playback_changed(CollectionFailurePolicy::Preserve, cx);
+        } else if update.changed {
+            self.sync_seek_slider(cx);
         }
         if let Some(failure) = update.failure {
             self.failures.set(Operation::Playback, failure);
@@ -883,7 +907,7 @@ impl PlayerView {
         if let Some(client) = &self.connection.read(cx).client
             && self.transport.toggle(client)
         {
-            self.playback_changed(cx);
+            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
     fn toggle_shuffle(&mut self, cx: &mut Context<Self>) {
@@ -903,7 +927,14 @@ impl PlayerView {
         if self.settings.value().volume > 0. {
             self.unmuted_volume = self.settings.value().volume;
         }
+        self.sync_volume_slider(cx);
         cx.notify();
+    }
+
+    fn sync_volume_slider(&self, cx: &mut Context<Self>) {
+        self.volume_slider.update(cx, |slider, cx| {
+            slider.configure(self.settings.value().volume, true, None, cx)
+        });
     }
 
     fn toggle_mute(&mut self, cx: &mut Context<Self>) {
@@ -964,7 +995,7 @@ impl PlayerView {
     }
 
     fn open_selected(&mut self, cx: &mut Context<Self>) {
-        if self.browser.is_loading() {
+        if self.library_loader.read(cx).is_loading() {
             return;
         }
         let entries = self.visible_entries();
@@ -1120,7 +1151,7 @@ impl PlayerView {
             ),
             Help => self.show_help = !self.show_help,
             Refresh => {
-                if !self.browser.is_loading() {
+                if !self.library_loader.read(cx).is_loading() {
                     if matches!(self.browser.state().page, Page::Folder(_)) {
                         self.refresh_folders(cx);
                     } else {
@@ -1210,7 +1241,7 @@ impl Render for PlayerView {
             );
         let content = if matches!(self.browser.state().page, Page::Search(_)) {
             self.search_results(cx)
-        } else if self.browser.is_loading() && !self.browser.state().more {
+        } else if self.library_loader.read(cx).is_loading() && !self.browser.state().more {
             empty_state(colors, "Loading your library…")
         } else {
             match self.browser.state().page {

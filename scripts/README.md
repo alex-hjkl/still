@@ -82,7 +82,11 @@ their retries, and adding/removing a song in Liked songs.
 It verifies audio position advancement and seek results, with no dependency
 on the macOS Now Playing bridge. The first track reports zero server duration;
 the check verifies that its decoded duration enables the slider and that progress
-advances during playback and seeking. Reports and logs stay in ignored
+advances during playback and seeking. It also checks the configured volume slider,
+seek resets on manual and automatic track changes and disconnect, and collection
+Retry preservation on auto-advance. The search check replaces an in-flight request,
+releases its delayed error after the replacement starts, submits immediately with
+Enter and returns to cached results. Reports and logs stay in ignored
 `.local/ui-test-results/linux-*` directories. No real saved connection or
 library is used. The scenario does not exercise credential-store persistence
 or native system media keys. It is a local interactive-desktop check, not a

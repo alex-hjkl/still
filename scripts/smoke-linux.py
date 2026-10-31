@@ -31,10 +31,12 @@ def scenario(launch, tracks):
 
     if launch == 1:
         return [expect(connected=True, loaded=True, page="songs", search="", shuffle=True,
-                       volume=0.65, sidebar_width=208), dict(action="quit")]
+                       volume=0.65, volume_slider=0.65, seek_enabled=False,
+                       seek_progress_max=0, sidebar_width=208), dict(action="quit")]
     folder = "/Music/Коллекция 🎵/Очень длинное название альбома"
     return [
-        expect(connected=True, loaded=True, page="artists"),
+        expect(connected=True, loaded=True, page="artists", volume_slider=0.7,
+               seek_enabled=False, seek_progress_max=0),
         dict(action="set_theme", preference="macchiato"),
         expect(theme="macchiato", theme_preference="macchiato", theme_bg=0x24273a),
         dict(action="theme_menu"), expect(theme_menu=True, theme_menu_fits=True),
@@ -63,7 +65,16 @@ def scenario(launch, tracks):
         expect(playback="paused", audio_position_min=10, seek_progress_min=0.05),
         key("left"), expect(playback="paused", audio_position_max=4),
         key("space"), expect(playback="playing"),
-        key("]"), expect(playback="playing", current_track=tracks[1]["id"]),
+        key("]"), expect(playback="playing", current_track=tracks[1]["id"], seek_progress_max=0.01),
+        key("cmd-1"), expect(page="artists", loaded=True),
+        key("shift-enter"), expect(failures=["retry-collection"]),
+        # Finish the current track through the audio worker, then advance manually.
+        # The collection error survives the observed transition and clears on Next.
+        dict(action="key_burst", keys=["right"] * 18),
+        expect(playback="playing", current_track=tracks[2]["id"],
+               seek_progress_max=0.01, failures=["retry-collection"]),
+        key("]"), expect(playback="playing", current_track=tracks[3]["id"],
+                         seek_progress_max=0.01, failures=[]),
         key("space"), expect(playback="paused"),
         key("cmd-4"), expect(page="folders", loaded=True, path=""),
         key("l"), expect(path="/Music"),
@@ -82,10 +93,21 @@ def scenario(launch, tracks):
         key("cmd-5"), expect(page="liked", loaded=True, selected=tracks[0]["id"], failures=[]),
         key("f"), expect(selected="", failures=[]),
         key("cmd-3"), expect(page="songs", loaded=True),
+        key("/"), dict(action="text", text="stale"),
+        expect(page="search", loaded=False, library_loading=True),
+        key("cmd-a"), dict(action="text", text="Paper"), key("enter"),
+        expect(page="search", loaded=True, library_loading=False, search="Paper",
+               search_counts=[0, 0, 1], selected=tracks[1]["id"], failures=[]),
+        key("escape"), expect(page="songs", loaded=True, library_loading=False,
+                              selected=tracks[0]["id"]),
         key("/"), dict(action="text", text="Paper"), expect(page="search", loaded=True, search="Paper", search_counts=[0, 0, 1]),
         key("enter"), expect(selected=tracks[1]["id"]),
         key("cmd-b"), expect(sidebar_width=208),
-        key("s"), expect(shuffle=True), key("-"), expect(volume=0.65),
+        key("s"), expect(shuffle=True), key("-"), expect(volume=0.65, volume_slider=0.65),
+        key("="), expect(volume=0.7, volume_slider=0.7),
+        key("-"), expect(volume=0.65, volume_slider=0.65),
+        dict(action="disconnect"), expect(connected=False, seek_enabled=False,
+                                         seek_progress_max=0, volume_slider=0.65),
         dict(action="quit"),
     ]
 
@@ -125,7 +147,8 @@ def main():
     image = cover(0)
     requests = []
     liked = set()
-    fail_artist = True
+    stale_search_release = threading.Event()
+    artist_calls = 0
     fail_like = True
 
     class Handler(BaseHTTPRequestHandler):
@@ -133,7 +156,7 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal fail_artist, fail_like
+            nonlocal artist_calls, fail_like
             parsed = urlsplit(self.path)
             method = parsed.path.rsplit("/", 1)[-1].removesuffix(".view")
             params = parse_qs(parsed.query)
@@ -143,8 +166,9 @@ def main():
             if method == "getArtists":
                 body["artists"] = {"index": [{"artist": [dict(id="artist-0", name="Mira Sol", albumCount=len(albums))]}]}
             elif method == "getArtist":
-                if fail_artist:
-                    fail_artist = False
+                artist_calls += 1
+                # Fail the initial collection request and the one during playback.
+                if artist_calls in (1, 4):
                     body = {"status": "failed", "error": {"code": 50}}
                 else:
                     body["artist"] = {"album": albums}
@@ -157,9 +181,16 @@ def main():
                 start = int(params.get("songOffset", ["0"])[0])
                 count = int(params.get("songCount", ["200"])[0])
                 query = params.get("query", [""])[0].strip().casefold()
-                found = [track for track in tracks if query in
-                         " ".join(track.get(field, "") for field in ["title", "artist", "album"]).casefold()]
-                body["searchResult3"] = {"song": found[start:start + count]}
+                if query == "stale":
+                    # The obsolete response arrives only after its replacement starts.
+                    stale_search_release.wait(timeout=5)
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    if query == "paper":
+                        stale_search_release.set()
+                    found = [track for track in tracks if query in
+                             " ".join(track.get(field, "") for field in ["title", "artist", "album"]).casefold()]
+                    body["searchResult3"] = {"song": found[start:start + count]}
             elif method == "getStarred2":
                 body["starred2"] = {"song": [track for track in tracks if track["id"] in liked]}
             elif method == "star":

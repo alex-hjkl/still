@@ -73,7 +73,7 @@ impl PlayerView {
                         .flex_shrink_0()
                         .cursor_pointer()
                         .text_color(rgb(colors.accent))
-                        .child(if self.browser.is_loading() {
+                        .child(if self.library_loader.read(cx).is_loading() {
                             "Loading…".to_owned()
                         } else {
                             shortcuts::MORE.hint(shortcuts::MORE.label)

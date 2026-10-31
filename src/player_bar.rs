@@ -14,17 +14,6 @@ impl PlayerView {
                 (duration as f32 * ratio).round() as u64
             });
 
-        let progress = if duration > 0 {
-            self.transport.state().position.as_secs_f32() / duration as f32
-        } else {
-            0.
-        };
-        self.seek_slider.update(cx, |slider, cx| {
-            slider.configure(progress, enabled && duration > 0, Some(duration), cx)
-        });
-        self.volume_slider.update(cx, |slider, cx| {
-            slider.configure(self.settings.value().volume, true, None, cx)
-        });
         div()
             .h(px(PLAYER_HEIGHT))
             .flex_shrink_0()

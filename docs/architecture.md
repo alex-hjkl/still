@@ -4,7 +4,8 @@ Still is a single desktop application. Domain models are kept independent of GPU
 where practical; views adapt user input and asynchronous results to those models.
 
 - `browser.rs`, `folders.rs`: loaded records, visible entries, navigation history,
-  server folder tree, selection restoration and queue inputs.
+  server folder tree, selection restoration and queue inputs. Browser does not own
+  active requests or cancellation; its `loaded` flag describes cached page data.
 - `models.rs`: shared artist, album and song records, library page size, sorting
   and duration labels. Domain modules do not import these records from the HTTP adapter.
 - `api.rs`: Subsonic requests, response decoding and authentication. MD5 is used
@@ -13,9 +14,10 @@ where practical; views adapt user input and asynchronous results to those models
 - `player.rs`: audio worker, cancelable buffering/decoding and watch-channel snapshots.
 - `playback_controller.rs`: queue, playback policy, worker recovery and native media
   integration. Views read its state and send commands through its methods.
-- `library_loader.rs`: pending background library task, cooperative cancellation
-  and execution of library requests. The view reconciles completion events with
-  current navigation.
+- `library_loader.rs`: sole owner of the active library request, task, cancellation
+  and loading status. It rejects outdated and duplicate completions before emitting
+  an event. Navigation cancels this controller; the view applies its accepted
+  outcomes to Browser and reconciles likes and playback selection.
 - `collection_controller.rs`: background collection resolution, cancellation,
   failures and retry state. Playback changes and disconnect cancel pending work;
   a canceled result cannot start a new queue.
@@ -103,6 +105,11 @@ for diagnostics, with authenticated request URLs redacted and short UI messages.
 Snapshots also carry the decoder's duration. If the server reports zero duration,
 playback progress, seeks and native Now Playing use that duration; track changes
 reset it. An unknown duration is displayed as `--:--` and disables the seek slider.
+The seek slider is synchronized at initialization, disconnect and playback updates;
+the volume slider is synchronized at initialization and volume changes. Rendering
+the player bar only reads state. All track changes share one handler: explicit
+local playback actions dismiss collection failures, while transitions observed
+by polling preserve them so Retry remains available.
 
 Song artwork is suppressed when the album is missing or is Navidrome's Unknown
 Album placeholder. Even media-file cover IDs may fall back to shared album art,
