@@ -111,6 +111,24 @@ the complete audio preparation deadline. Device-free Rodio tests hold a seek ope
 while checking accumulated relative seeks, target replacement, Stop, Next and
 stale completion rejection. HTTP error tests check retained causes and URL redaction.
 
+## Artist and album columns
+
+On macOS, run the isolated column-navigation regression:
+
+```sh
+python3 scripts/smoke-macos.py --automated --columns-only
+```
+
+The synthetic fixture checks parent/current/preview identities, h/l navigation,
+restoring selections and scroll offsets, side-column activation, album entry from
+search and the global album list, empty albums, preview failure/Retry, and rejecting
+an old delayed error after the selection changes. It covers playback, help, both
+themes and a 780×640 window. Preview requests use their own loader and never cancel
+active-page pagination. It also changes server data on refresh and checks retained
+selection/scroll positions, then counts requests to verify that entering an
+in-flight preview reuses the request, including failure and Retry. Reports stay
+under `.local/ui-test-results/`.
+
 ## Record the README demo
 
 On macOS with FFmpeg and the Xcode command-line tools installed:

@@ -7,7 +7,15 @@ where practical; views adapt user input and asynchronous results to those models
   server folder tree, selection restoration and queue inputs. Browser does not own
   active requests or cancellation. Each page holds `Option<PageData>`: artists,
   albums, songs, mixed search results or a cached folder marker. `loaded()` derives
-  from that option, distinguishing an empty loaded page from an unloaded page.
+  from that option and a freshness flag, distinguishing an empty loaded page from
+  an unloaded or invalidated page. Refresh retains old rows and selection IDs,
+  reloads the previously loaded extent and restores selection by record identity.
+  LibraryPage carries the last server response's pagination flag when a refresh
+  combines multiple pages.
+  The ancestor history supplies the visible parent, preserving the actual entry
+  route (including search). A separate preview PageState is promoted on entry.
+  Up to 32 recently loaded pages retain child selections and share records on Arc;
+  disconnect clears the cache. PageId separates stable identity from display metadata.
 - `models.rs`: shared artist, album and song records, library page size, sorting
   and time labels. Unknown total durations use `--:--` consistently in lists,
   the folder preview and player bar; a zero playback position still uses `0:00`.
@@ -22,10 +30,16 @@ where practical; views adapt user input and asynchronous results to those models
   navigation, cached pages, section selection, folder restoration, search changes,
   pagination and library-specific failures and retries. Its Browser accessor is
   read-only; selection and navigation changes use explicit controller methods.
-- `library_loader.rs`: owns the active library request, task, cancellation
+- `library_loader.rs`: owns one library request, task, cancellation
   and loading status. It rejects outdated and duplicate completions before emitting
   an event. LibraryController cancels it on navigation and applies accepted results.
   The view reconciles likes and playback selection and handles focus and scrolling.
+  A second LibraryLoader handles previews, starting after 150 ms. Entering a child
+  whose request is pending swaps the loader roles; subscribers resolve those roles
+  at delivery, so no request restarts. Other route/selection changes cancel stale
+  work. Preview failures and Retry stay in that column and do not block the active
+  list. Refresh invalidates cached data, retaining positions, and starts the preview
+  after the current page has refreshed. Cached fresh previews open without another request.
 - `collection_controller.rs`: background collection resolution, cancellation,
   failures and retry state. Playback changes and disconnect cancel pending work;
   a canceled result cannot start a new queue. Completion checks request identity
@@ -61,7 +75,15 @@ where practical; views adapt user input and asynchronous results to those models
 - `demo.rs`: pure local demo records and loading without GPUI or a Navidrome server.
 - `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
   previous focus when its menu closes.
-- `library_view.rs`, `sidebar.rs`: library lists, headers and sidebar rendering.
+- `library_view.rs`, `sidebar.rs`: library header and sidebar rendering.
+- `columns.rs`: shared parent/current/preview layout and column headers.
+  `library_columns.rs` adapts artists, albums, songs and mixed search results to
+  a typed LibraryRow model and one row renderer, with independently retained scroll
+  handles keyed by PageId. Navigation changes schedule one deferred reconciliation
+  of the final state per GPUI effect cycle; transient intermediate pages do not
+  start previews or reset another page's scroll handle.
+  Parent and preview rows use the same navigation/playback actions as the active
+  list. `track_details.rs` renders the shared song details for all browsing modes.
 - `search_view.rs`: library-wide search input, debounce and mixed artist, album
   and song results, using the same navigation and playback actions as library lists.
 - `connection_screen.rs`, `folder_columns.rs`, `player_bar.rs`, `keyboard_help.rs`:

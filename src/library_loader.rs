@@ -1,27 +1,48 @@
 //! Owns pending library work and delivers completions without borrowing a view.
 use crate::{
     api::Navidrome,
-    browser::{LibraryData, LibraryRequest, Page},
+    browser::{LibraryData, LibraryPage, LibraryRequest, Page},
     requests::{Cancellation, Requests},
 };
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
 
 impl LibraryRequest {
-    pub fn run(&self, client: Navidrome, cancellation: &Cancellation) -> Result<LibraryData> {
+    pub fn run(&self, client: Navidrome, cancellation: &Cancellation) -> Result<LibraryPage> {
+        let mut page = self.run_page(&client, self.offset, cancellation)?;
+        for index in 1..self.pages {
+            if !page.more {
+                break;
+            }
+            let next = self.run_page(
+                &client,
+                self.offset + index * crate::models::PAGE_SIZE,
+                cancellation,
+            )?;
+            page.append(next);
+        }
+        Ok(page)
+    }
+
+    fn run_page(
+        &self,
+        client: &Navidrome,
+        offset: usize,
+        cancellation: &Cancellation,
+    ) -> Result<LibraryPage> {
         cancellation.check()?;
         let data = match &self.page {
             Page::Artists => LibraryData::Artists(client.artists()?),
-            Page::Albums => LibraryData::Albums(client.albums(self.offset)?),
-            Page::Songs => LibraryData::Songs(client.songs(self.offset)?),
-            Page::Search(query) => LibraryData::Search(client.search(query, self.offset)?),
+            Page::Albums => LibraryData::Albums(client.albums(offset)?),
+            Page::Songs => LibraryData::Songs(client.songs(offset)?),
+            Page::Search(query) => LibraryData::Search(client.search(query, offset)?),
             Page::Liked => LibraryData::Songs(client.liked_songs()?),
             Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
             Page::Album(album) => LibraryData::Album(client.album(&album.id)?),
             Page::Folder(_) => LibraryData::Folders(client.folder_library(cancellation)?),
         };
         cancellation.check()?;
-        Ok(data)
+        Ok(data.into())
     }
 }
 
@@ -33,7 +54,7 @@ pub struct LoadContext {
 }
 pub struct LoadOutcome {
     pub context: LoadContext,
-    pub result: anyhow::Result<LibraryData>,
+    pub result: anyhow::Result<LibraryPage>,
 }
 #[derive(Default)]
 pub struct LibraryLoader {
@@ -47,6 +68,18 @@ impl LibraryLoader {
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
     }
+    pub fn has_request_for(&self, page: &Page) -> bool {
+        self.pending
+            .as_ref()
+            .map(|load| &load.request)
+            .or_else(|| {
+                self.outcome
+                    .as_ref()
+                    .map(|outcome| &outcome.context.request)
+            })
+            .is_some_and(|request| request.page.id() == page.id())
+    }
+
     pub fn request_id(&self) -> u64 {
         self.requests.id()
     }
@@ -60,11 +93,23 @@ impl LibraryLoader {
         self.outcome.take()
     }
     pub fn start(&mut self, client: Navidrome, context: LoadContext, cx: &mut Context<Self>) {
+        self.start_after(client, context, std::time::Duration::ZERO, cx);
+    }
+
+    pub fn start_after(
+        &mut self,
+        client: Navidrome,
+        context: LoadContext,
+        delay: std::time::Duration,
+        cx: &mut Context<Self>,
+    ) {
         let operation = context.request.clone();
         let (request_id, cancellation) = self.begin(context);
-        let task = cx
-            .background_executor()
-            .spawn(async move { operation.run(client, &cancellation) });
+        let timer = cx.background_executor().timer(delay);
+        let task = cx.background_executor().spawn(async move {
+            timer.await;
+            operation.run(client, &cancellation)
+        });
         self.task = Some(cx.spawn(async move |loader, cx| {
             let result = task.await;
             let _ = loader.update(cx, |loader, cx| {
@@ -83,7 +128,7 @@ impl LibraryLoader {
         request
     }
 
-    fn finish(&mut self, request_id: u64, result: Result<LibraryData>) -> bool {
+    fn finish(&mut self, request_id: u64, result: Result<LibraryPage>) -> bool {
         if !self.requests.is_current(request_id) {
             return false;
         }
@@ -128,16 +173,110 @@ mod tests {
 
     fn context(page: Page, offset: usize) -> LoadContext {
         LoadContext {
-            request: LibraryRequest { page, offset },
+            request: LibraryRequest {
+                page,
+                offset,
+                pages: 1,
+            },
             like_revision: 4,
             playback_generation: 7,
         }
     }
 
     #[test]
+    fn refreshing_search_combines_categories_and_keeps_the_selected_album() {
+        use crate::{
+            models::SearchResults,
+            test_http::{Response, Server},
+        };
+        let albums = |range: std::ops::Range<usize>| {
+            range
+                .map(|i| json!({"id":format!("album-{i}"), "name":format!("Album {i}")}))
+                .collect::<Vec<_>>()
+        };
+        let server = Server::new([
+            Response::subsonic(
+                "search3",
+                json!({"searchResult3":{
+                    "artist":[{"id":"artist", "name":"Artist"}], "album":albums(0..200),
+                    "song":[{"id":"track", "title":"Track"}]
+                }}),
+            )
+            .query("albumOffset", 0)
+            .query("songOffset", 0),
+            Response::subsonic(
+                "search3",
+                json!({"searchResult3":{"album":albums(200..215)}}),
+            )
+            .query("albumOffset", 200)
+            .query("songOffset", 200),
+        ]);
+        let client = Navidrome::new(&server.url, "fixture", "fixture").unwrap();
+        let mut browser = Browser::default();
+        browser.navigate(Page::Search("query".into()), false);
+        browser.apply(
+            LibraryData::Search(SearchResults {
+                albums: (0..400).map(album).collect(),
+                ..Default::default()
+            }),
+            false,
+        );
+        browser.set_cursor(205);
+        browser.refresh();
+        let page = browser
+            .request()
+            .run(client, &Cancellation::default())
+            .unwrap();
+        browser.apply(page, false);
+        assert_eq!(browser.state().albums().len(), 215);
+        assert_eq!(browser.state().artists().len(), 1);
+        assert_eq!(browser.state().songs().len(), 1);
+        assert_eq!(browser.state().cursor, 206);
+        assert!(!browser.state().more);
+        assert_eq!(browser.state().albums()[205].id, "album-205");
+        server.finish();
+    }
+
+    #[test]
+    fn refresh_reloads_the_loaded_extent_and_uses_the_last_response_pagination() {
+        use crate::test_http::{Response, Server};
+        for remaining in [0, 25, 200] {
+            let first: Vec<_> = (0..200)
+                .map(|i| json!({"id": format!("album-{i}"), "name": format!("Album {i}")}))
+                .collect();
+            let last: Vec<_> = (200..200 + remaining)
+                .map(|i| json!({"id": format!("album-{i}"), "name": format!("Album {i}")}))
+                .collect();
+            let server = Server::new([
+                Response::subsonic("getAlbumList2", json!({"albumList2":{"album":first}}))
+                    .query("offset", 0),
+                Response::subsonic("getAlbumList2", json!({"albumList2":{"album":last}}))
+                    .query("offset", 200),
+            ]);
+            let client = Navidrome::new(&server.url, "fixture", "fixture").unwrap();
+            let mut browser = Browser::default();
+            browser.navigate(Page::Albums, false);
+            browser.apply(LibraryData::Albums((0..200).map(album).collect()), false);
+            browser.apply(LibraryData::Albums((200..400).map(album).collect()), true);
+            browser.set_cursor(210);
+            browser.refresh();
+            assert_eq!(browser.request().pages, 2);
+            let page = browser
+                .request()
+                .run(client, &Cancellation::default())
+                .unwrap();
+            browser.apply(page, false);
+            assert_eq!(browser.state().albums().len(), 200 + remaining);
+            assert_eq!(browser.state().cursor, 210.min(199 + remaining));
+            assert_eq!(browser.state().more, remaining == 200);
+            server.finish();
+        }
+    }
+
+    #[test]
     fn replacing_a_load_cancels_it_and_rejects_late_successes_and_errors() {
         for stale in [
-            Ok(LibraryData::Songs(vec![song(0)])),
+            Ok(LibraryData::Songs(vec![song(0)]).into()),
             Err(anyhow::anyhow!("late failure")),
         ] {
             let mut loader = LibraryLoader::default();
@@ -150,7 +289,7 @@ mod tests {
             assert!(loader.is_loading());
             assert!(loader.take_outcome().is_none());
 
-            assert!(loader.finish(current, Ok(LibraryData::Songs(vec![song(1)]))));
+            assert!(loader.finish(current, Ok(LibraryData::Songs(vec![song(1)]).into())));
             assert!(!loader.is_loading());
             assert!(!loader.finish(old, Err(anyhow::anyhow!("late failure after success"))));
             // A duplicate completion cannot replace an outcome waiting for the UI.
@@ -159,7 +298,7 @@ mod tests {
             assert!(matches!(&outcome.context.request.page, Page::Search(query) if query == "new"));
             assert_eq!(outcome.context.like_revision, 4);
             assert_eq!(outcome.context.playback_generation, 7);
-            let LibraryData::Songs(songs) = outcome.result.unwrap() else {
+            let LibraryData::Songs(songs) = outcome.result.unwrap().data else {
                 panic!("songs")
             };
             assert_eq!(songs[0].id, "song-1");
@@ -178,7 +317,7 @@ mod tests {
         assert!(loader.take_outcome().is_none());
 
         let (request, _) = loader.begin(context(Page::Albums, 0));
-        assert!(loader.finish(request, Ok(LibraryData::Albums(vec![album(0)]))));
+        assert!(loader.finish(request, Ok(LibraryData::Albums(vec![album(0)]).into())));
         loader.cancel();
         assert!(loader.take_outcome().is_none());
     }
@@ -197,7 +336,7 @@ mod tests {
         assert!(browser.back());
         loader.cancel();
         assert!(cancellation.check().is_err());
-        assert!(!loader.finish(request, Ok(LibraryData::Songs(vec![song(99)]))));
+        assert!(!loader.finish(request, Ok(LibraryData::Songs(vec![song(99)]).into())));
         assert!(loader.take_outcome().is_none());
         assert!(browser.state().loaded());
         assert!(Arc::ptr_eq(

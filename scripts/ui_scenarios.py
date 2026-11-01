@@ -130,7 +130,7 @@ def scenario(launch, tracks):
         dict(action="set_theme", preference="latte"),
         dict(action="system_appearance", dark=True), expect(theme="latte", theme_preference="latte"),
         dict(action="toggle_theme"), expect(theme="macchiato", theme_bg=0x24273a),
-        expect(connected=True, loaded=True, page="artists", sidebar_width=64, sidebar_icons=sidebar_icons()),
+        expect(connected=True, loaded=True, page="artists", sidebar_width=64, sidebar_icons=sidebar_icons(), preview_loaded=True),
         dict(action="fail_connection_save"), expect(failures=["retry-connection"]),
         key("cmd-3"), expect(page="songs", loaded=False, failures=["retry-connection", "retry-library"]),
         dict(action="retry", operation="library"), expect(page="songs", loaded=True, failures=["retry-connection"]),

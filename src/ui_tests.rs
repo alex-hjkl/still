@@ -34,6 +34,10 @@ pub(super) struct RenderProbe {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Step {
     ToggleTheme,
+    ActivateColumn {
+        column: String,
+        row: usize,
+    },
     SetTheme {
         preference: ThemePreference,
     },
@@ -138,6 +142,9 @@ pub(super) fn demo_overlay(colors: Palette, hint: Option<&DemoHint>) -> Option<g
 
 #[derive(Default, Deserialize, Serialize)]
 struct Expected {
+    section: Option<Section>,
+    preview_loaded: Option<bool>,
+    preview_failed: Option<bool>,
     theme: Option<Theme>,
     theme_preference: Option<ThemePreference>,
     system_theme_matches: Option<bool>,
@@ -199,6 +206,10 @@ struct Expected {
 
 #[derive(Serialize)]
 struct Snapshot {
+    section: Section,
+    preview_loaded: bool,
+    preview_failed: bool,
+    list_scroll_y: f32,
     theme: Theme,
     theme_preference: ThemePreference,
     system_theme_matches: bool,
@@ -290,6 +301,14 @@ impl Snapshot {
             .get(state.cursor)
             .and_then(|entry| view.library.browser().entry_song(entry));
         Self {
+            section: view.library.browser().section(),
+            preview_loaded: view
+                .library
+                .browser()
+                .preview()
+                .is_some_and(|state| state.loaded()),
+            preview_failed: view.library.preview_failure().is_some(),
+            list_scroll_y: f32::from(scroll.base_handle.offset().y),
             current_liked: current.is_some_and(|song| likes.is_liked(song)),
             current_like_pending: current.is_some_and(|song| likes.is_pending(&song.id)),
             selected_liked: selected_song.is_some_and(|song| likes.is_liked(song)),
@@ -444,6 +463,9 @@ impl Snapshot {
             && expected
                 .volume_slider
                 .is_none_or(|volume| (self.volume_slider - volume).abs() < 0.001)
+            && field!(section)
+            && field!(preview_loaded)
+            && field!(preview_failed)
             && field!(page)
             && field!(path)
             && field!(selected)
@@ -687,6 +709,26 @@ impl Run {
                 .connection
                 .clone()
                 .update(cx, |connection, _| connection.test_store_available()),
+            Step::ActivateColumn { column, row } => {
+                let column = match column.as_str() {
+                    "parent" => super::columns::Column::Parent,
+                    "current" => super::columns::Column::Current,
+                    "preview" => super::columns::Column::Preview,
+                    _ => bail!("Unknown column"),
+                };
+                self.view.update(cx, |view, cx| {
+                    let browser = view.library.browser();
+                    let state = match column {
+                        super::columns::Column::Parent => browser.parent(),
+                        super::columns::Column::Current => Some(browser.state()),
+                        super::columns::Column::Preview => browser.preview(),
+                    };
+                    if let Some(page) = state.map(|state| state.page.id()) {
+                        view.activate_library_row(column, &page, *row, cx);
+                        window.focus(&view.library_focus);
+                    }
+                });
+            }
             Step::Retry { operation } => {
                 let target = match operation.as_str() {
                     operation if operation.starts_with("like:") => {
@@ -694,6 +736,7 @@ impl Run {
                     }
                     "connection" => FailureTarget::Connection,
                     "library" => FailureTarget::Operation(Operation::Library),
+                    "preview" => FailureTarget::Preview,
                     "collection" => FailureTarget::Operation(Operation::Collection),
                     "playback" => FailureTarget::Operation(Operation::Playback),
                     _ => bail!("Unknown retry operation"),

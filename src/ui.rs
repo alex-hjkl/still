@@ -1,6 +1,6 @@
 use crate::{
     artwork::{app_icon, artwork},
-    browser::{BrowserEntry, LibraryData, Page},
+    browser::{BrowserEntry, LibraryData, Page, PageId},
     collection::Collection,
     collection_controller::{CollectionController, CollectionEvent},
     connection::{Activity, ConnectionController, ConnectionEvent},
@@ -40,10 +40,16 @@ mod connection_screen;
 #[path = "theme_picker.rs"]
 mod theme_picker;
 use theme_picker::ThemeMenu;
+#[path = "columns.rs"]
+mod columns;
 #[path = "folder_columns.rs"]
 mod folder_columns;
 #[path = "keyboard_help.rs"]
 mod keyboard_help;
+#[path = "library_columns.rs"]
+mod library_columns;
+#[path = "track_details.rs"]
+mod track_details;
 #[cfg(feature = "ui-tests")]
 #[path = "ui_tests.rs"]
 mod ui_tests;
@@ -66,6 +72,7 @@ mod status_bar;
 
 #[derive(Clone)]
 enum FailureTarget {
+    Preview,
     Connection,
     Operation(Operation),
 }
@@ -90,6 +97,8 @@ pub struct PlayerView {
     keys: Keys,
     connection_scroll: gpui::ScrollHandle,
     list_scroll: UniformListScrollHandle,
+    library_scrolls: std::collections::HashMap<PageId, UniformListScrollHandle>,
+    columns_update_pending: bool,
     folder_parent_scroll: UniformListScrollHandle,
     folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
@@ -170,6 +179,8 @@ impl PlayerView {
             keys: Keys::default(),
             connection_scroll: gpui::ScrollHandle::new(),
             list_scroll: UniformListScrollHandle::new(),
+            library_scrolls: Default::default(),
+            columns_update_pending: false,
             folder_parent_scroll: UniformListScrollHandle::new(),
             folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
@@ -231,13 +242,23 @@ impl PlayerView {
                 }
                 cx.notify();
             }));
-        self.subscriptions
-            .push(cx.subscribe(self.library.loader(), |this, loader, _, cx| {
-                let outcome = loader.update(cx, |loader, _| loader.take_outcome());
-                if let Some(outcome) = outcome {
-                    this.accept_library(outcome, cx);
-                }
-            }));
+        for loader in [
+            self.library.loader().clone(),
+            self.library.preview_loader().clone(),
+        ] {
+            self.subscriptions
+                .push(cx.subscribe(&loader, |this, loader, _, cx| {
+                    if let Some(outcome) = loader.update(cx, |loader, _| loader.take_outcome()) {
+                        if loader == *this.library.loader() {
+                            this.accept_library(outcome, cx);
+                        } else {
+                            this.library.accept_preview(outcome);
+                            this.update_columns(cx);
+                            cx.notify();
+                        }
+                    }
+                }));
+        }
         self.subscriptions.push(
             cx.subscribe(&self.collections, |this, controller, event, cx| {
                 if let CollectionEvent::Ready = event
@@ -255,6 +276,7 @@ impl PlayerView {
                     && matches!(this.library.browser().state().page, Page::Liked)
                 {
                     this.merge_liked(cx);
+                    this.update_columns(cx);
                 }
                 cx.notify();
             }));
@@ -353,7 +375,7 @@ impl PlayerView {
                         this.submit_search(cx);
                         window.focus(&this.library_focus);
                         this.keyboard_active = true;
-                        this.reveal_cursor();
+                        this.update_columns(cx);
                     }
                 }
                 cx.notify();
@@ -416,6 +438,7 @@ impl PlayerView {
         }
         self.remember_folder(cx);
         self.library.clear(cx);
+        self.library_scrolls.clear();
         self.cancel_collection(cx);
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
@@ -481,6 +504,7 @@ impl PlayerView {
     ) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
         let id: SharedString = match &target {
+            FailureTarget::Preview => "retry-preview".into(),
             FailureTarget::Connection => "retry-connection".into(),
             FailureTarget::Operation(Operation::Library) => "retry-library".into(),
             FailureTarget::Operation(Operation::Collection) => "retry-collection".into(),
@@ -505,7 +529,10 @@ impl PlayerView {
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
-        self.list_scroll = UniformListScrollHandle::new();
+        if matches!(self.library.browser().state().page, Page::Folder(_)) {
+            self.list_scroll = UniformListScrollHandle::new();
+        }
+        self.update_columns(cx);
         self.reset_folder_columns();
         let text = match &self.library.browser().state().page {
             Page::Search(query) => query.clone(),
@@ -546,7 +573,7 @@ impl PlayerView {
     fn navigation_changed(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.library.browser().state().page, Page::Search(_)) {
             self.settings
-                .update(|value| value.last_section = self.library.browser().state().page.section());
+                .update(|value| value.last_section = self.library.browser().section());
         }
         self.reset_navigation_ui(cx);
         let context = self.library_context(cx);
@@ -558,7 +585,7 @@ impl PlayerView {
             self.merge_liked(cx);
         }
         self.remember_folder(cx);
-        self.reveal_cursor();
+        self.update_columns(cx);
         cx.notify();
     }
 
@@ -572,7 +599,10 @@ impl PlayerView {
 
     fn accept_library(&mut self, mut outcome: LoadOutcome, cx: &mut Context<Self>) {
         if matches!(outcome.context.request.page, Page::Liked)
-            && let Ok(LibraryData::Songs(songs)) = &mut outcome.result
+            && let Ok(crate::browser::LibraryPage {
+                data: LibraryData::Songs(songs),
+                ..
+            }) = &mut outcome.result
         {
             let songs = std::mem::take(songs);
             outcome.result = Ok(LibraryData::Songs(
@@ -583,18 +613,18 @@ impl PlayerView {
                         likes.accept_server(songs, outcome.context.like_revision)
                     })
                 },
-            ));
+            )
+            .into());
         }
         let change = self.library.accept(outcome);
         if change.restored_folder {
             self.reset_navigation_ui(cx);
         }
         self.remember_folder(cx);
-        if self.transport.generation() == change.playback_generation
-            || !self.follow_current_track(cx)
-        {
-            self.reveal_cursor();
+        if self.transport.generation() != change.playback_generation {
+            self.follow_current_track(cx);
         }
+        self.update_columns(cx);
         cx.notify();
     }
 
@@ -622,6 +652,11 @@ impl PlayerView {
 
     fn retry(&mut self, target: FailureTarget, cx: &mut Context<Self>) {
         match target {
+            FailureTarget::Preview => {
+                let context = self.library_context(cx);
+                self.library.retry_preview(context, cx);
+                self.update_columns(cx);
+            }
             FailureTarget::Connection => {
                 self.connection
                     .update(cx, |connection, cx| connection.retry(cx));
@@ -698,6 +733,7 @@ impl PlayerView {
         self.sync_seek_slider(cx);
         self.failures.clear(&Operation::Playback);
         self.follow_current_track(cx);
+        self.update_columns(cx);
         cx.notify();
     }
 
@@ -729,7 +765,14 @@ impl PlayerView {
             return false;
         };
         self.library.set_cursor(row);
-        self.list_scroll.scroll_to_item(row, ScrollStrategy::Center);
+        let scroll = if matches!(self.library.browser().state().page, Page::Folder(_)) {
+            &self.list_scroll
+        } else {
+            self.library_scrolls
+                .entry(self.library.browser().state().page.id())
+                .or_default()
+        };
+        scroll.scroll_to_item(row, ScrollStrategy::Center);
         true
     }
 
@@ -935,27 +978,7 @@ impl PlayerView {
     }
 
     fn title(&self) -> String {
-        match &self.library.browser().state().page {
-            Page::Artists | Page::Albums | Page::Songs | Page::Liked => self
-                .library
-                .browser()
-                .state()
-                .page
-                .section()
-                .info()
-                .label
-                .into(),
-            Page::Search(_) => "Search results".into(),
-            Page::Artist(artist) => artist.name.clone(),
-            Page::Album(album) => album.name.clone(),
-            Page::Folder(path) => {
-                if path.is_empty() {
-                    Section::Folders.info().label.into()
-                } else {
-                    file_name(path).into()
-                }
-            }
-        }
+        self.library.browser().state().page.title()
     }
 
     fn visible_entries(&self) -> Arc<Vec<BrowserEntry>> {
@@ -978,7 +1001,7 @@ impl PlayerView {
     }
 
     fn section_index(&self) -> usize {
-        self.library.browser().state().page.section().index()
+        self.library.browser().section().index()
     }
 
     fn switch_section(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1035,7 +1058,7 @@ impl PlayerView {
         if editing && command == Command::Escape {
             window.focus(&self.library_focus);
             self.keyboard_active = true;
-            self.reveal_cursor();
+            self.update_columns(cx);
             cx.notify();
             return;
         }
@@ -1144,15 +1167,20 @@ impl PlayerView {
                     if matches!(self.library.browser().state().page, Page::Folder(_)) {
                         self.refresh_folders(cx);
                     } else {
-                        self.navigate(self.library.browser().state().page.clone(), false, cx);
+                        self.library.refresh(cx);
+                        self.navigation_changed(cx);
                     }
                 }
             }
             More => self.load_more(cx),
             Prefix | ToggleSidebar => {}
         }
-        self.remember_folder(cx);
-        self.reveal_cursor();
+        if matches!(
+            command,
+            Down | Up | First | Last | HalfDown | HalfUp | PageDown | PageUp
+        ) {
+            self.update_columns(cx);
+        }
         cx.notify();
     }
 
@@ -1228,18 +1256,14 @@ impl Render for PlayerView {
                     cx.notify();
                 }),
             );
-        let content = if matches!(self.library.browser().state().page, Page::Search(_)) {
-            self.search_results(cx)
-        } else if self.library.is_loading(cx) && !self.library.browser().state().more {
-            empty_state(colors, "Loading your library…")
-        } else {
-            match self.library.browser().state().page {
-                Page::Artists => self.artists_list(cx),
-                Page::Albums | Page::Artist(_) => self.albums_list(cx),
-                Page::Songs | Page::Liked | Page::Album(_) => self.songs_list(cx),
-                Page::Folder(_) => self.folder_columns(cx),
-                Page::Search(_) => unreachable!(),
+        let content = if matches!(self.library.browser().state().page, Page::Folder(_)) {
+            if self.library.is_loading(cx) {
+                empty_state(colors, "Loading your library…")
+            } else {
+                self.folder_columns(cx)
             }
+        } else {
+            self.library_columns(cx)
         };
         let main = div()
             .flex_1()
@@ -1255,10 +1279,6 @@ impl Render for PlayerView {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .when(
-                        !matches!(self.library.browser().state().page, Page::Folder(_)),
-                        |view| view.px_4(),
-                    )
                     .child(content),
             )
             .children(self.failure_banners(cx))

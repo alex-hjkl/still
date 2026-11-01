@@ -1,47 +1,7 @@
 use super::*;
 use crate::folders::parent_path;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Column {
-    Parent,
-    Current,
-    Preview,
-}
-
-fn column_header(colors: Palette, path: &str) -> gpui::Div {
-    div()
-        .h(px(40.))
-        .flex_shrink_0()
-        .px_3()
-        .flex()
-        .items_center()
-        .bg(rgb(colors.panel))
-        .border_b_1()
-        .border_color(rgb(colors.border))
-        .child(
-            div()
-                .min_w_0()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .truncate()
-                .child(
-                    if path.is_empty() {
-                        "/"
-                    } else {
-                        file_name(path)
-                    }
-                    .to_owned(),
-                ),
-        )
-}
-
-fn column_message(colors: Palette, message: &'static str) -> gpui::Div {
-    div()
-        .p_3()
-        .text_size(px(TEXT_SECONDARY))
-        .text_color(rgb(colors.muted))
-        .whitespace_normal()
-        .child(message)
-}
+use super::columns::{Column, column_header, column_layout, column_message};
 
 impl PlayerView {
     pub(super) fn reset_folder_columns(&mut self) {
@@ -59,7 +19,6 @@ impl PlayerView {
             self.folder_parent_scroll
                 .scroll_to_item(row, ScrollStrategy::Center);
         }
-        self.reveal_cursor();
     }
 
     pub(super) fn folder_columns(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -87,46 +46,22 @@ impl PlayerView {
                 ))
                 .into_any_element(),
         };
-        div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_hidden()
-            .child(
-                div()
-                    .w(relative(0.23))
-                    .h_full()
-                    .min_w_0()
-                    .flex_shrink_0()
-                    .flex()
-                    .border_r_1()
-                    .border_color(rgb(colors.border))
-                    .children(parent)
-                    .when(path.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .child(column_message(colors, "Library root")),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .w(relative(0.42))
-                    .h_full()
-                    .min_w_0()
-                    .flex_shrink_0()
-                    .flex()
-                    .border_r_1()
-                    .border_color(rgb(colors.border))
-                    .child(self.folder_column(path, Column::Current, None, cx)),
-            )
-            .child(preview)
-            .into_any_element()
+        let parent = parent.unwrap_or_else(|| {
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(column_message(colors, "Library root"))
+                .into_any_element()
+        });
+        column_layout(
+            colors,
+            Some(parent),
+            self.folder_column(path, Column::Current, None, cx),
+            preview,
+        )
+        .into_any_element()
     }
 
     fn folder_column(
@@ -168,7 +103,15 @@ impl PlayerView {
             .h_full()
             .flex()
             .flex_col()
-            .child(column_header(colors, path));
+            .child(column_header(
+                colors,
+                if path.is_empty() {
+                    "/"
+                } else {
+                    file_name(path)
+                }
+                .to_owned(),
+            ));
         if entries.is_empty() {
             return pane
                 .child(column_message(colors, "No music in this folder"))
@@ -292,103 +235,5 @@ impl PlayerView {
             .w_full(),
         );
         pane.into_any_element()
-    }
-
-    fn song_preview(&self, entry: &BrowserEntry, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let colors = crate::theme::colors(cx);
-        let song = self.entry_song(entry).expect("selected song");
-        let duration = if self
-            .transport
-            .queue()
-            .current()
-            .is_some_and(|current| current.id == song.id)
-        {
-            self.transport.duration()
-        } else {
-            song.duration
-        };
-        let duration_text = duration_label(duration);
-        #[cfg(feature = "ui-tests")]
-        {
-            self.ui_probe.borrow_mut().preview_song = Some(song.id.clone());
-        }
-        let row = self.library.browser().state().cursor;
-        div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .id("folder-track-preview")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_3()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    .gap_4()
-                    .child(artwork(
-                        colors,
-                        self.connection.read(cx).client(),
-                        song.artwork_id(),
-                        96.,
-                    ))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(18.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .whitespace_normal()
-                                    .child(song.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(TEXT_SECONDARY))
-                                    .text_color(rgb(colors.muted))
-                                    .whitespace_normal()
-                                    .child(song.artist.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex_shrink_0()
-                            .text_size(px(TEXT_CAPTION))
-                            .text_color(rgb(colors.muted))
-                            .whitespace_normal()
-                            .child(if song.album.is_empty() {
-                                duration_text
-                            } else {
-                                format!("{} · {}", song.album, duration_text)
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                button(colors, "folder-preview-play", "Play · Enter")
-                                    .bg(rgb(colors.accent))
-                                    .text_color(rgb(colors.on_accent))
-                                    .hover(move |view| view.bg(rgb(colors.accent_hover)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.play_row(row, cx);
-                                    })),
-                            )
-                            .child(self.like_button(song, "folder-preview-like", cx)),
-                    ),
-            )
-            .into_any_element()
     }
 }

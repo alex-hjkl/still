@@ -24,6 +24,8 @@ pub struct LibraryChange {
 pub struct LibraryController {
     browser: Browser,
     loader: Entity<LibraryLoader>,
+    preview_loader: Entity<LibraryLoader>,
+    preview_failure: Option<Failure>,
     pending_folder: Option<SavedFolder>,
     failure: Option<Failure>,
 }
@@ -33,6 +35,8 @@ impl LibraryController {
         Self {
             browser: Browser::default(),
             loader: cx.new(|_| LibraryLoader::default()),
+            preview_loader: cx.new(|_| LibraryLoader::default()),
+            preview_failure: None,
             pending_folder: None,
             failure: None,
         }
@@ -44,6 +48,75 @@ impl LibraryController {
     pub fn loader(&self) -> &Entity<LibraryLoader> {
         &self.loader
     }
+    pub fn preview_loader(&self) -> &Entity<LibraryLoader> {
+        &self.preview_loader
+    }
+
+    pub fn preview_failure(&self) -> Option<&Failure> {
+        self.preview_failure.as_ref()
+    }
+
+    pub fn sync_preview(&mut self, context: LibraryContext, cx: &mut App) {
+        if self.browser.sync_preview() {
+            self.preview_loader.update(cx, |loader, _| loader.cancel());
+            self.preview_failure = None;
+        }
+        let Some(preview) = self.browser.preview() else {
+            return;
+        };
+        if preview.loaded()
+            || self.preview_loader.read(cx).is_loading()
+            || self.preview_failure.is_some()
+            || !context.session.is_active()
+        {
+            return;
+        }
+        let load = LoadContext {
+            request: LibraryRequest {
+                page: preview.page.clone(),
+                offset: 0,
+                pages: 1,
+            },
+            like_revision: context.like_revision,
+            playback_generation: context.playback_generation,
+        };
+        match context.session {
+            Session::Demo => {
+                let data = crate::demo::load(&load.request.page);
+                self.browser.accept_preview(&load.request.page, data);
+            }
+            Session::Connected(client) => self.preview_loader.update(cx, |loader, cx| {
+                loader.start_after(client, load, std::time::Duration::from_millis(150), cx)
+            }),
+            Session::Disconnected => {}
+        }
+    }
+
+    pub fn accept_preview(&mut self, outcome: LoadOutcome) {
+        if self.browser.preview().map(|state| state.page.id())
+            != Some(outcome.context.request.page.id())
+        {
+            return;
+        }
+        match outcome.result {
+            Ok(data) => {
+                self.browser
+                    .accept_preview(&outcome.context.request.page, data);
+            }
+            Err(error) => {
+                self.preview_failure = Some(Failure::new(
+                    format!("{error:#}"),
+                    RetryAction::Library(outcome.context.request),
+                ))
+            }
+        }
+    }
+
+    pub fn retry_preview(&mut self, context: LibraryContext, cx: &mut App) {
+        self.preview_failure = None;
+        self.sync_preview(context, cx);
+    }
+
     pub fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref()
     }
@@ -71,6 +144,8 @@ impl LibraryController {
 
     fn cancel_load(&mut self, cx: &mut App) {
         self.loader.update(cx, |loader, _| loader.cancel());
+        self.preview_loader.update(cx, |loader, _| loader.cancel());
+        self.preview_failure = None;
         self.failure = None;
     }
 
@@ -81,7 +156,15 @@ impl LibraryController {
     }
 
     pub fn navigate(&mut self, page: Page, remember: bool, cx: &mut App) {
-        self.cancel_load(cx);
+        if remember && self.preview_loader.read(cx).has_request_for(&page) {
+            // Roles move with the entities; subscribers identify the role at delivery.
+            self.loader.update(cx, |loader, _| loader.cancel());
+            std::mem::swap(&mut self.loader, &mut self.preview_loader);
+            self.failure = None;
+            self.preview_failure = None;
+        } else {
+            self.cancel_load(cx);
+        }
         self.pending_folder = None;
         self.browser.navigate(page, remember);
     }
@@ -120,6 +203,11 @@ impl LibraryController {
         true
     }
 
+    pub fn refresh(&mut self, cx: &mut App) {
+        self.cancel_load(cx);
+        self.browser.refresh();
+    }
+
     pub fn refresh_folders(&mut self, cx: &mut App) -> bool {
         if self.is_loading(cx) {
             return false;
@@ -148,7 +236,12 @@ impl LibraryController {
     }
 
     pub fn load_current(&mut self, context: LibraryContext, cx: &mut App) -> Option<LoadOutcome> {
-        if self.browser.state().loaded() || self.is_loading(cx) {
+        if self.browser.state().loaded()
+            || self
+                .loader
+                .read(cx)
+                .has_request_for(&self.browser.state().page)
+        {
             return None;
         }
         self.load(self.browser.request(), context, cx)
@@ -191,7 +284,7 @@ impl LibraryController {
         };
         match context.session {
             Session::Demo => {
-                let result = Ok(crate::demo::load(&load.request.page));
+                let result = Ok(crate::demo::load(&load.request.page).into());
                 Some(LoadOutcome {
                     context: load,
                     result,

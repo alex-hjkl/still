@@ -30,6 +30,14 @@
 | Command+B | Switch compact / expanded sidebar |
 | Command+Q | Quit, including while editing a field |
 
+Artists and albums use parent, current and preview columns. Move with j / k to
+update the preview; l enters the selection and h returns to its parent. Returning
+restores the selection and scroll position. Clicking a row in a side column opens
+it in that context. Albums opened from search keep the results as their parent;
+albums opened from Albums keep the complete album list. Songs and Liked songs show
+track details alongside the list. Refresh (`r`) updates cached previews and all
+previously loaded pages while retaining the selected record and scroll position.
+
 Shift+Enter includes subfolders when playing a folder. With a song selected in
 Folders, it plays the current folder and its subfolders. In an open album or
 Liked songs, it starts the entire list from the first song.

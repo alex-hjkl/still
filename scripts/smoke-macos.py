@@ -31,13 +31,16 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--automated", action="store_true", help="Run native UI assertions, restart restoration, and connection form checks without manual input")
     mode.add_argument("--record-demo", type=Path, metavar="DIRECTORY", help="Record a synthetic keyboard demo as GIF and MP4")
+    parser.add_argument("--columns-only", action="store_true", help="With --automated, check artist/album/search columns and preview loading")
     parser.add_argument("--connection-only", action="store_true", help="With --automated, run only the connection / input scenario")
     parser.add_argument("--repeat", type=int, choices=range(1, 11), default=1, help="Number of isolated connection launches with --connection-only")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--size", type=int, nargs=2, metavar=("WIDTH", "HEIGHT"), help="Initial isolated window size")
     args = parser.parse_args()
-    if (args.connection_only or args.repeat != 1) and not args.automated:
-        parser.error("Connection stress checks require --automated")
+    if (args.columns_only or args.connection_only or args.repeat != 1) and not args.automated:
+        parser.error("Focused checks require --automated")
+    if args.columns_only and args.connection_only:
+        parser.error("Choose columns or connection checks")
     if args.repeat != 1 and not args.connection_only:
         parser.error("--repeat requires --connection-only")
     if sys.platform != "darwin":
@@ -78,6 +81,9 @@ def main():
                              album="Музыка из фильма — полное собрание")
                 track["path"] = f"/music/{directories[i // 30]}/Очень длинное название композиции {i:03} 🎵.wav"
     covers = {}
+    if args.columns_only:
+        from column_fixture import library
+        column_artists, albums, tracks = library()
     if args.record_demo is not None:
         from demo_fixture import cover, library
         albums, tracks = library()
@@ -87,12 +93,18 @@ def main():
         library_artists = [dict(id=f"artist-{index}", name=name,
                                 albumCount=sum(album["artist"] == name for album in albums))
                            for index, name in enumerate(sorted({album["artist"] for album in albums}))]
+    if args.columns_only:
+        library_artists = column_artists
     liked = {"song-2"}
     fail_more = True
-    fail_songs = args.automated
-    fail_artist = args.automated
+    fail_songs = args.automated and not args.columns_only
+    fail_artist = args.automated and not args.columns_only
+    artist_requests = 0
+    fail_preview = args.columns_only
     fail_search = args.automated
     methods = []
+    requests = []
+    refreshed_columns = False
     audio = io.BytesIO()
     with wave.open(audio, "wb") as wav:
         wav.setnchannels(1)
@@ -105,14 +117,16 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal fail_more, fail_songs, fail_artist, fail_search
+            nonlocal fail_more, fail_songs, fail_artist, fail_search, artist_requests, fail_preview, refreshed_columns
             url = urlsplit(self.path)
             method = url.path.rsplit("/", 1)[-1].removesuffix(".view")
             methods.append(method)
             params = parse_qs(url.query)
             item_id = params.get("id", [""])[0]
             offset = int(params.get("offset", params.get("songOffset", ["0"]))[0])
-            print(json.dumps(dict(method=method, id=item_id, offset=offset)), flush=True)
+            event = dict(method=method, id=item_id, offset=offset)
+            requests.append(event)
+            print(json.dumps(event), flush=True)
             body = {"status": "ok"}
             if method == "ping" and params.get("u") == ["invalid"]:
                 body = {"status": "failed", "error": {"code": 40, "message": "Wrong username or password."}}
@@ -121,13 +135,25 @@ def main():
             elif method == "getArtists":
                 body["artists"] = {"index": [{"artist": library_artists}]}
             elif method == "getArtist":
-                if fail_artist:
+                artist_requests += 1
+                if fail_artist and artist_requests >= 2:
                     fail_artist = False
                     body = {"status": "failed", "error": {"code": 50}}
                 else:
                     if args.automated:
                         time.sleep(0.5)
-                    body["artist"] = {"album": albums[:2] if args.automated else albums}
+                    if args.columns_only:
+                        if item_id == "artist-0" and not refreshed_columns and sum(r["method"] == "getArtist" and r["id"] == item_id for r in requests) > 1:
+                            refreshed_columns = True
+                            refreshed = next(a for a in albums if a["id"] == "extra-27")
+                            refreshed.update(name="More music 27 — updated", songCount=25)
+                            new_song = dict(next(t for t in tracks if t["id"] == "extra-27-song-0"))
+                            new_song.update(id="extra-27-song-24", title="Added after refresh", track=25)
+                            tracks.append(new_song)
+                        artist = next(a for a in library_artists if a["id"] == item_id)
+                        body["artist"] = {"album": [a for a in albums if a["artist"] == artist["name"]]}
+                    else:
+                        body["artist"] = {"album": albums[:2] if args.automated else albums}
             elif method == "getAlbumList2":
                 if offset == 200 and fail_more:
                     fail_more = False
@@ -142,11 +168,21 @@ def main():
                     body["albumList2"] = {"album": ordered[offset:offset + 200]}
             elif method == "getAlbum":
                 album = next((album for album in albums if album["id"] == item_id), albums[0])
-                songs = [track for track in tracks if track["albumId"] == album["id"]] if args.record_demo is not None else tracks
-                if args.automated and album["id"] in {"album-0", "album-1"}:
+                songs = [track for track in tracks if track["albumId"] == album["id"]] if args.record_demo is not None or args.columns_only else tracks
+                if args.automated and not args.columns_only and album["id"] in {"album-0", "album-1"}:
                     start = 0 if album["id"] == "album-0" else 60
                     songs = tracks[start:start + 60]
-                body["album"] = dict(album, song=songs)
+                if args.columns_only and item_id in {"album-1", "album-5"}:
+                    time.sleep(0.8)
+                promoted_error = args.columns_only and item_id == "album-5" and sum(r["method"] == "getAlbum" and r["id"] == item_id for r in requests) == 1
+                if promoted_error:
+                    body = {"status": "failed", "error": {"code": 50}}
+                elif args.columns_only and (item_id == "album-slow" or (item_id == "album-fail" and fail_preview)):
+                    if item_id == "album-slow": time.sleep(0.7)
+                    else: fail_preview = False
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    body["album"] = dict(album, song=songs)
             elif method == "search3":
                 size = int(params.get("songCount", ["200"])[0])
                 query = params.get("query", [""])[0].strip().casefold()
@@ -229,16 +265,20 @@ def main():
         if args.case != "connection":
             env.update(NAVIDROME_USERNAME="fixture", NAVIDROME_PASSWORD="fixture")
         try:
-            launches = args.repeat if args.connection_only else (3 if args.automated else (2 if args.relaunch else 1))
+            launches = 1 if args.columns_only else args.repeat if args.connection_only else (3 if args.automated else (2 if args.relaunch else 1))
             for launch in range(launches):
                 scenario_index = 2 if args.connection_only else launch
                 methods.clear()
+                requests.clear()
                 if scripted:
                     script = root / f"ui-script-{launch}.json"
                     if args.record_demo is not None:
                         from demo_fixture import scenario
                         steps = scenario()
                         env["STILL_DEMO_CAPTURE"] = str(root)
+                    elif args.columns_only:
+                        from column_fixture import scenario
+                        steps = scenario()
                     else:
                         from ui_scenarios import scenario
                         steps = scenario(scenario_index, tracks)
@@ -269,7 +309,10 @@ def main():
                     result = json.loads((root / f"ui-result-{launch}.json").read_text())
                     if not result["success"]:
                         raise RuntimeError(result["error"])
-                    if args.automated and not args.connection_only and launch == 1:
+                    if args.columns_only:
+                        from column_fixture import verify_result
+                        verify_result(result, requests)
+                    if args.automated and not args.connection_only and not args.columns_only and launch == 1:
                         if methods[:2] != ["ping", "search3"] or "getArtists" in methods:
                             raise RuntimeError("Restoring Folders must not load Artists")
                     if args.automated and scenario_index == 2 and methods.count("ping") != 2:
@@ -288,7 +331,7 @@ def main():
                     print(json.dumps(dict(preferences=saved_preferences)), flush=True)
                     if args.automated and "filter" in (saved_preferences.get("last_folder") or {}):
                         raise RuntimeError("Legacy folder filters must not be written back to preferences")
-                    if args.automated and not args.connection_only and launch == 0:
+                    if args.automated and not args.connection_only and not args.columns_only and launch == 0:
                         # Upgrade regression: old folder filters must not hide rows
                         # after restoring the saved track with the unified search UI.
                         previous = json.loads(preferences.read_text())
