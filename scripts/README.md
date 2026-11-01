@@ -12,7 +12,22 @@ It checks and packages macOS arm64, macOS x86_64, Linux x86_64 (Ubuntu 22.04),
 and Windows x86_64 (MSVC). Actions are pinned to commit hashes. Only the tag
 release job has write access, and checkout does not persist credentials.
 
-Each job uploads its versioned archive and SHA-256 checksum as an Actions
+An independent `cargo audit` job checks the complete `Cargo.lock` against the
+current RustSec database, including dependencies for other platforms. It also
+runs every Monday at 07:23 UTC without building or uploading packages. Known
+vulnerabilities and unsoundness advisories fail the job and block draft releases;
+maintenance advisories remain visible as warnings. No advisories are ignored.
+To run the same audit:
+
+```sh
+cargo install cargo-audit --version 0.22.2 --locked
+cargo audit --deny unsound
+```
+
+See [dependency notes](../docs/architecture.md#runtime-and-dependency-notes)
+for upstream constraints and the separately reviewed `grid` advisory.
+
+Each build job uploads its versioned archive and SHA-256 checksum as an Actions
 artifact, retained for 14 days. Download **Still-Windows-x86_64** to test Windows:
 unpack both the Actions artifact and the contained release ZIP, then run
 `still.exe`. Keep the accompanying license files. Windows runtime verification
@@ -52,8 +67,8 @@ Prerequisites:
 To make a release, update `Cargo.toml` and `Cargo.lock`, commit the desired
 source, and push a matching version tag (for example `v0.1.0`). Pushing is an
 explicit remote action; do it only with the repository owner's approval.
-The workflow rejects tags that do not match the package version. After all
-four jobs pass, it verifies the archive checksums and creates a **draft**
+The workflow rejects tags that do not match the package version. After the audit
+and all four builds pass, it verifies the archive checksums and creates a **draft**
 GitHub Release with those files. Re-running can update the draft, but cannot
 replace an already-published release. Review the draft and publish it manually.
 Manual dispatch and branch/PR builds only produce Actions artifacts.

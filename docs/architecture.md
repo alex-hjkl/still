@@ -209,3 +209,18 @@ pin works around GPUI's old `xattr` dependency. Revisit these constraints after 
 upstream GPUI update. Rust is pinned by `rust-toolchain.toml`; `Cargo.lock` records
 dependency versions. Linux smoke checks cover desktop navigation, playback and
 preferences; Windows is not validated by the native UI suite.
+
+The `libc` pin also prevents `stream-download` 0.24.5: its new `parking_lot` 0.13
+dependency requires `libc` 0.2.191 or newer. Keep 0.24.4 until the GPUI / `xattr`
+constraint can be removed.
+
+The RustSec CI audit fails on vulnerabilities and unsoundness advisories, and
+reports maintenance advisories without suppressing them. GPUI still brings
+several unmaintained dependencies; reassess these when upgrading the framework.
+RustSec is not an exhaustive list of security issues. A separate OSV review on
+2026-11-01 found
+[`GHSA-38c5-483c-4qqp`](https://github.com/becheran/grid/security/advisories/GHSA-38c5-483c-4qqp)
+in `grid` 0.18 through GPUI's pinned `taffy` 0.9.0. The issue requires calling
+`Grid::expand_rows`; Taffy's source does not call it, and Still uses flex layouts.
+Leave the dependency unchanged for now and reassess this finding when upgrading
+GPUI / Taffy or introducing direct `grid` use. No audit exception is configured.
