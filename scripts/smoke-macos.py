@@ -150,6 +150,7 @@ def main():
                             new_song = dict(next(t for t in tracks if t["id"] == "extra-27-song-0"))
                             new_song.update(id="extra-27-song-24", title="Added after refresh", track=25)
                             tracks.append(new_song)
+                    if args.columns_only or args.record_demo is not None:
                         artist = next(a for a in library_artists if a["id"] == item_id)
                         body["artist"] = {"album": [a for a in albums if a["artist"] == artist["name"]]}
                     else:

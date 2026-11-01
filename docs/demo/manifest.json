@@ -1,6 +1,6 @@
 {
-  "description": "Visually reviewed recording of the isolated synthetic Still demo library. No real connection, music, desktop or audio is captured.",
+  "description": "Visually reviewed recording of the isolated synthetic Still library with fictional metal bands, albums and songs. No real connection, music, desktop or audio is captured.",
   "sha256": {
-    "docs/demo/still.mp4": "0e3ced8727867fc851168e46084a9e93d4950d7c2632e065fa5069c938c1f8c4"
+    "docs/demo/still.mp4": "61b2b436f4b9572bac2b9d09bb653a1f6fe37089d079cbdfbb1efe24e8d2cb53"
   }
 }

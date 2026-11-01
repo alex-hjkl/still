@@ -155,9 +155,10 @@ python3 scripts/smoke-macos.py --record-demo .local/demo
 This builds the `ui-tests` feature, launches an isolated app and local fixture
 server, and records only that process's window using macOS `screencapture`.
 The native driver displays keystroke captions and checks the resulting selection,
-navigation, playback and sidebar state. Original geometric covers, fictional
-metadata and silent generated audio come from `demo_fixture.py`. No saved login
-or real music library is used. The captions are excluded from normal releases.
+navigation, playback and sidebar state. `demo_fixture.py` supplies original
+geometric covers, fictional metal bands, albums and songs, and silent generated
+audio. No saved login or real music library is used. The captions are excluded
+from normal releases.
 
 The output contains a looping GIF and a silent H.264 MP4. The native title bar is
 cropped out; no desktop, microphone or system audio is recorded. macOS may request
@@ -266,7 +267,8 @@ are copied to `.local/smoke-failures/<run-id>/` before cleanup.
 
 ## Library and saved preferences
 
-1. Open Albums with Cmd+2. Check that each album occupies one full-width row.
+1. Open Albums with Cmd+2. Check the album list and the selected album's song
+   preview. Each album row fills its list column.
 2. Press j, j, k and check that the selection moves down, down, up. Check the
    arrow keys, PageDown and PageUp, including after resizing the window.
 3. Press e to load another page. The fixture fails once; click Retry. The count
@@ -282,7 +284,8 @@ are copied to `.local/smoke-failures/<run-id>/` before cleanup.
 python3 scripts/smoke-macos.py --case folders
 ```
 
-1. Press Cmd+4. Check the three columns: Parent folder, Current folder, Folder preview.
+1. Press Cmd+4. Check the current folder and its preview. After entering a folder,
+   its parent appears on the left; column headers show the folder names.
 2. Press l twice to enter `/music/Collections`. Moving j/k between Film Alpha
    and Film Beta must update the right column without entering either folder.
 3. Enter Film Alpha, select CD 2 with j, then press l. The left column highlights
@@ -294,7 +297,10 @@ python3 scripts/smoke-macos.py --case folders
 6. In CD 2, select a track, focus search and enter its title. Results must come
    from the whole library. Clear × to restore CD 2 and the selected track while
    keeping input focus; Escape returns keyboard focus to the folder list.
-7. Click a track in the preview column. The middle must move to its folder and
+7. Click a track's heart in the current or preview column. The like state must
+   update without starting playback or navigating. Its tooltip must change after
+   saving while the pointer stays over it; check the updated state in Liked songs.
+8. Click a track in the preview column. The middle must move to its folder and
    playback must use that exact track. Check Refresh folders and an empty search
    result. Cmd+Q must print exitCode 0.
 

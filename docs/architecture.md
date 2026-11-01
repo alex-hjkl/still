@@ -3,6 +3,8 @@
 Still is a single desktop application. Domain models are kept independent of GPUI
 where practical; views adapt user input and asynchronous results to those models.
 
+- `main.rs`: application startup, bundled fonts, initial theme, window creation
+  and the native quit action.
 - `browser.rs`, `folders.rs`: loaded records, visible entries, navigation history,
   server folder tree, selection restoration and queue inputs. Browser does not own
   active requests or cancellation. Each page holds `Option<PageData>`: artists,
@@ -40,6 +42,8 @@ where practical; views adapt user input and asynchronous results to those models
   work. Preview failures and Retry stay in that column and do not block the active
   list. Refresh invalidates cached data, retaining positions, and starts the preview
   after the current page has refreshed. Cached fresh previews open without another request.
+- `collection.rs`: resolves an artist or album into an ordered song collection
+  without changing the current browser page.
 - `collection_controller.rs`: background collection resolution, cancellation,
   failures and retry state. Playback changes and disconnect cancel pending work;
   a canceled result cannot start a new queue. Completion checks request identity
@@ -72,6 +76,12 @@ where practical; views adapt user input and asynchronous results to those models
   Construction creates the view, attaches its subscriptions, then initializes
   playback controls, polling and the initial connection or demo page.
 - `ui_components.rs`: shared buttons, rows, notifications, icons, tooltips and empty states.
+  Live tooltips subscribe to controller events, so a pending like's label updates
+  even while the pointer stays over the button. `ui.rs` owns the shared like button
+  used by library rows, folder columns, track details and the player.
+- `icons.rs`: embedded SVG asset lookup for Phosphor icons and the Still mark.
+  `artwork.rs` loads and caches covers, crops nonsquare images to a centered square
+  before GPUI painting, and renders placeholders and the themed app mark.
 - `demo.rs`: pure local demo records and loading without GPUI or a Navidrome server.
 - `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
   previous focus when its menu closes.
@@ -87,7 +97,9 @@ where practical; views adapt user input and asynchronous results to those models
 - `search_view.rs`: library-wide search input, debounce and mixed artist, album
   and song results, using the same navigation and playback actions as library lists.
 - `connection_screen.rs`, `folder_columns.rs`, `player_bar.rs`, `keyboard_help.rs`:
-  screen rendering and view-specific interactions.
+  screen rendering and view-specific interactions. `status_bar.rs` renders
+  contextual shortcuts, collection loading status and Load more.
+- `layout.rs`: shared row, player and sidebar dimensions, plus keyboard page sizing.
 - `navigation.rs`: section ordering, persisted identities, names, icons and shortcuts.
 - `shortcuts.rs`: key bindings and descriptions shared by dispatch, keyboard help,
   contextual hints and tooltips. `keyboard.rs` owns editing, help availability and
@@ -202,6 +214,8 @@ Folder trees are cached until refresh or disconnect. Recursive playback orders f
 by filename, then visits child folders by name. Album and song lists load 200 records
 per page. Metadata is displayed as supplied by Navidrome; fix incorrectly encoded tags
 in the source library. `scripts/check-paths.py` provides read-only path diagnostics.
+Refreshing Folders discards the tree and its saved directory selections and reloads
+the root; library-list refresh instead retains the current list's loaded extent.
 
 GPUI is pinned to published version 0.2.2. Its transitive `block` and
 `proc-macro-error2` dependencies produce future-compatibility warnings. The `libc`

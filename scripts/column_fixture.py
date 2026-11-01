@@ -5,17 +5,18 @@ from demo_fixture import library as demo_library
 def library():
     albums, tracks = demo_library()
     artists = [dict(id=f"artist-{i}", name=name, albumCount=0)
-               for i, name in enumerate(["Mira Sol", "North Relay", "Juniper Lane"])]
+               for i, name in enumerate(dict.fromkeys(album["artist"] for album in albums))]
+    primary_artist = artists[0]["name"]
     extras = [("album-slow", "Slow preview", 2021),
               ("album-fail", "Retry preview", 2022),
               ("album-empty", "Empty album", 2023)]
     extras += [(f"extra-{i}", f"More music {i:02}", 2024) for i in range(28)]
     for item_id, name, year in extras:
         songs = [] if item_id == "album-empty" else [
-            dict(id=f"{item_id}-song-{i}", title=f"{name} / Track {i:02}", artist="Mira Sol",
+            dict(id=f"{item_id}-song-{i}", title=f"{name} / Track {i:02}", artist=primary_artist,
                  album=name, albumId=item_id, duration=180, track=i+1, coverArt=item_id,
-                 path=f"/Music/Mira Sol/{name}/{i:02}.wav") for i in range(24)]
-        albums.append(dict(id=item_id, name=name, artist="Mira Sol", year=year,
+                 path=f"/Music/{primary_artist}/{name}/{i:02}.wav") for i in range(24)]
+        albums.append(dict(id=item_id, name=name, artist=primary_artist, year=year,
                            songCount=len(songs), coverArt=item_id))
         tracks.extend(songs)
     for i in range(24):
@@ -29,6 +30,7 @@ def library():
 
 
 def scenario():
+    search_album = demo_library()[0][2]["name"]
     def key(value): return dict(action="key", key=value)
     def expect(**values): return dict(action="expect", **values)
     def columns(current, parent=None, preview=None):
@@ -86,11 +88,11 @@ def scenario():
              key("h"), key("home"), expect(page="albums", selected="album-0", preview_loaded=True),
              key("l"), expect(page="album", section="albums", columns=columns(album("album-0"), parent="Albums")),
              key("h"), expect(page="albums", selected="album-0"),
-             key("/"), dict(action="text", field="search", text="Quiet Geometry"),
+             key("/"), dict(action="text", field="search", text=search_album),
              expect(page="search", loaded=True, search_counts=[0, 1, 5], preview_loaded=True),
              key("escape"), key("l"), expect(page="album", loaded=True),
-             expect(columns=columns(album("album-2"), parent='Search("Quiet Geometry")')),
-             key("h"), expect(page="search", selected="album-2", search="Quiet Geometry"),
+             expect(columns=columns(album("album-2"), parent=f'Search("{search_album}")')),
+             key("h"), expect(page="search", selected="album-2", search=search_album),
              key("/"), key("cmd-a"), key("backspace"), expect(page="albums", focus="search"),
              key("escape"), key("cmd-3"), expect(page="songs", loaded=True, preview_song="song-0-1"),
              key("j"), expect(preview_song="song-0-2"), key("enter"),

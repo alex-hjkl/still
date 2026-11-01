@@ -13,12 +13,13 @@ Navigation uses Vim-style motions (`h`, `j`, `k`, `l`), with keyboard controls i
 by [Yazi](https://yazi-rs.github.io/),
 [cmux](https://cmux.com/), [T3 Code](https://t3.codes/), and other keyboard-driven apps.
 
-https://github.com/user-attachments/assets/0da23166-ce0f-49e3-aabb-0a53960abc83
+https://github.com/user-attachments/assets/cd93e5b3-42d5-4f18-9450-1e91b1a8c8b4
 
 ## Features
 
-- Browse artists, albums, songs and liked songs. Albums are sorted oldest first.
-- Navigate folders in parent, current and preview columns with `h`, `j`, `k`, `l`.
+- Browse artists, albums and folders in parent, current and preview columns.
+  Albums are sorted oldest first; song lists show details for the selected track.
+- Like tracks from lists, folder columns and the player, and browse Liked songs.
 - Stream music with queue advancement, shuffle, seeking, volume and mute.
 - Control playback with macOS media keys and Now Playing.
 - Search your entire library for artists, albums and songs.
@@ -62,8 +63,8 @@ Builds are ad hoc signed and not notarized.
 
 GitHub Actions checks the source and builds optimized packages for all four
 OS/architecture combinations on pushes, pull requests and manual CI runs.
-Download them from the run's **Artifacts**: macOS `.app.zip`, Linux `.tar.gz`,
-or Windows portable `.zip`, with a SHA-256 checksum for each archive.
+Download them from the run's **Artifacts**: a macOS `.zip` containing the `.app`,
+Linux `.tar.gz`, or Windows portable `.zip`, with a SHA-256 checksum for each archive.
 
 To build the current platform locally:
 
@@ -72,7 +73,7 @@ python3 scripts/build-release.py
 ```
 
 Packages are written to `target/packages/`. A tag matching `v<version>` in
-`Cargo.toml` also creates a **draft** GitHub Release after every build passes.
+`Cargo.toml` also creates a **draft** GitHub Release after CI passes.
 Publishing that draft is a separate manual action. No signing certificates or
 personal access token are needed for these initial builds. See
 [CI setup and Linux runtime checks](scripts/README.md#ci-and-release-builds).
