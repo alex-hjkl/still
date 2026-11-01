@@ -74,15 +74,29 @@ impl Asset for Cover {
                     .map_err(reqwest::Error::without_url)?
                     .bytes()
                     .map_err(reqwest::Error::without_url)?;
-                let mut data = image::load_from_memory(&bytes)?.into_rgba8();
-                for pixel in data.as_chunks_mut::<4>().0 {
-                    pixel.swap(0, 2);
-                }
+                let data = cover_pixels(&bytes)?;
                 Ok(Arc::new(RenderImage::new(vec![image::Frame::new(data)])))
             })();
             result.map_err(|error| ImageCacheError::Other(Arc::new(error)))
         })
     }
+}
+
+fn cover_pixels(bytes: &[u8]) -> Result<image::RgbaImage> {
+    let mut data = image::load_from_memory(bytes)?.into_rgba8();
+    let (width, height) = data.dimensions();
+    let edge = width.min(height);
+    if width != height {
+        // GPUI 0.2.2's ObjectFit::Cover paints beyond the element's bounds.
+        // Crop here so the image and its rounded corners stay inside the tile.
+        data =
+            image::imageops::crop_imm(&data, (width - edge) / 2, (height - edge) / 2, edge, edge)
+                .to_image();
+    }
+    for pixel in data.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Ok(data)
 }
 
 pub fn artwork(
@@ -120,5 +134,34 @@ pub fn artwork(
             .into_any_element()
     } else {
         placeholder()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn covers_are_center_cropped_to_square_without_stretching() {
+        for (width, height) in [(6, 4), (4, 6), (7, 4), (4, 7), (4, 4)] {
+            let source = image::RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba([x as u8, y as u8, 100, 255])
+            });
+            let mut bytes = Cursor::new(Vec::new());
+            source
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            let cropped = cover_pixels(bytes.get_ref()).unwrap();
+            let edge = width.min(height);
+            assert_eq!(cropped.dimensions(), (edge, edge));
+            for (x, y, pixel) in cropped.enumerate_pixels() {
+                let original = source.get_pixel(x + (width - edge) / 2, y + (height - edge) / 2);
+                assert_eq!(
+                    pixel.0,
+                    [original[2], original[1], original[0], original[3]]
+                );
+            }
+        }
     }
 }
