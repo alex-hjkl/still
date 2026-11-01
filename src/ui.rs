@@ -869,13 +869,8 @@ impl PlayerView {
         let liked = self.likes.read(cx).state().is_liked(song);
         let pending = self.likes.read(cx).state().is_pending(&song.id);
         let song = song.clone();
-        let label = if pending {
-            "Saving…"
-        } else if liked {
-            "Remove from liked songs"
-        } else {
-            "Add to liked songs"
-        };
+        let hint_song = song.clone();
+        let hint_likes = self.likes.clone();
         div()
             .id(SharedString::from(format!("{slot}-{}", song.id)))
             .size(px(32.))
@@ -891,7 +886,23 @@ impl PlayerView {
                 if liked { "heart-filled" } else { "heart" },
                 if liked { colors.liked } else { colors.muted },
             ))
-            .tooltip(move |_, cx| cx.new(|_| Hint::new(label)).into())
+            .tooltip(move |_, cx| {
+                let song = hint_song.clone();
+                cx.new(|cx| {
+                    Hint::live(hint_likes.clone(), cx, move |likes| {
+                        let state = likes.state();
+                        if state.is_pending(&song.id) {
+                            "Saving…"
+                        } else if state.is_liked(&song) {
+                            "Remove from liked songs"
+                        } else {
+                            "Add to liked songs"
+                        }
+                        .into()
+                    })
+                })
+                .into()
+            })
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();

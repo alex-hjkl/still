@@ -119,6 +119,11 @@ impl PlayerView {
         }
         let path = path.to_owned();
         let id: SharedString = format!("folder-column-{}-{path}", column as u8).into();
+        let like_slot = match column {
+            Column::Parent => "folder-parent-like",
+            Column::Current => "folder-song-like",
+            Column::Preview => "folder-preview-like",
+        };
         pane = pane.child(
             uniform_list(
                 id,
@@ -132,9 +137,9 @@ impl PlayerView {
                     let folder = library.folder(&path).expect("existing folder");
                     range
                         .map(|row| {
-                            let (name, detail, folder_entry, active) = match &entries[row] {
+                            let (name, detail, song) = match &entries[row] {
                                 BrowserEntry::Folder(child) => {
-                                    (file_name(child).to_owned(), String::new(), true, false)
+                                    (file_name(child).to_owned(), String::new(), None)
                                 }
                                 BrowserEntry::Song(index) => {
                                     let song = &folder.songs[*index];
@@ -145,15 +150,18 @@ impl PlayerView {
                                             .unwrap_or(&song.title)
                                             .to_owned(),
                                         song.artist.clone(),
-                                        false,
-                                        this.transport
-                                            .queue()
-                                            .current()
-                                            .is_some_and(|current| current.id == song.id),
+                                        Some(song),
                                     )
                                 }
                                 _ => unreachable!(),
                             };
+                            let folder_entry = song.is_none();
+                            let active = song.is_some_and(|song| {
+                                this.transport
+                                    .queue()
+                                    .current()
+                                    .is_some_and(|current| current.id == song.id)
+                            });
                             let color = if active { colors.accent } else { colors.text };
                             let path = path.clone();
                             let selected_entry = entries[row].clone();
@@ -195,6 +203,9 @@ impl PlayerView {
                                             )
                                         }),
                                 )
+                                .when_some(song, |view, song| {
+                                    view.child(this.like_button(song, like_slot, cx))
+                                })
                                 .when(folder_entry && column == Column::Current, |view| {
                                     let BrowserEntry::Folder(child) = &selected_entry else {
                                         unreachable!();

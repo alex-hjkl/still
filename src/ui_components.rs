@@ -1,6 +1,9 @@
 //! Shared GPUI building blocks; screen-specific actions stay in the views.
 use crate::theme::{Palette, TEXT_SECONDARY};
-use gpui::{Context, IntoElement, Render, SharedString, Window, div, prelude::*, px, rgb, svg};
+use gpui::{
+    App, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Subscription, Window,
+    div, prelude::*, px, rgb, svg,
+};
 
 pub fn icon_sized(name: &'static str, color: u32, edge: f32) -> gpui::Svg {
     svg()
@@ -85,11 +88,30 @@ pub fn row_play_button(
         .tooltip(move |_, cx| cx.new(|_| Hint::new(hint.clone())).into())
 }
 
-pub struct Hint(SharedString);
+pub struct Hint {
+    text: Box<dyn Fn(&App) -> SharedString>,
+    _subscription: Option<Subscription>,
+}
 
 impl Hint {
     pub fn new(text: impl Into<SharedString>) -> Self {
-        Self(text.into())
+        let text = text.into();
+        Self {
+            text: Box::new(move |_| text.clone()),
+            _subscription: None,
+        }
+    }
+
+    pub fn live<T: EventEmitter<E>, E: 'static>(
+        source: Entity<T>,
+        cx: &mut Context<Self>,
+        text: impl Fn(&T) -> SharedString + 'static,
+    ) -> Self {
+        let subscription = cx.subscribe(&source, |_, _, _: &E, cx| cx.notify());
+        Self {
+            text: Box::new(move |cx| text(source.read(cx))),
+            _subscription: Some(subscription),
+        }
     }
 }
 
@@ -103,7 +125,7 @@ impl Render for Hint {
             .bg(rgb(colors.tooltip_bg))
             .text_color(rgb(colors.tooltip_text))
             .text_size(px(TEXT_SECONDARY))
-            .child(self.0.clone())
+            .child((self.text)(cx))
     }
 }
 
