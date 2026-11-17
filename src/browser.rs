@@ -16,10 +16,31 @@ pub enum Page {
     Songs,
     Liked,
     Artist(Artist),
-    Album(Album),
+    Album(AlbumPage),
     Folder(String),
     // Empty input returns to the source page before entering search.
     Search(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct AlbumPage {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    pub song_count: usize,
+}
+
+impl From<&Album> for AlbumPage {
+    fn from(album: &Album) -> Self {
+        Self {
+            id: album.id.clone(),
+            name: album.name.clone(),
+            artist: album.artist.clone(),
+            year: album.year,
+            song_count: album.song_count,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -85,6 +106,17 @@ pub enum BrowserEntry {
     Album(usize),
     Folder(String),
     Song(usize),
+}
+
+#[derive(Clone)]
+pub enum PlayTarget {
+    Artist(Artist),
+    Album(Album),
+    OpenFolder(String),
+    SelectedFolder(String),
+    OpenAlbum(Arc<Vec<Song>>),
+    LikedSongs(Arc<Vec<Song>>),
+    Track(usize),
 }
 
 pub enum LibraryData {
@@ -189,7 +221,7 @@ impl PageState {
     pub fn child_page(&self, row: usize) -> Option<Page> {
         match self.entries.get(row)? {
             BrowserEntry::Artist(index) => Some(Page::Artist(self.artists()[*index].clone())),
-            BrowserEntry::Album(index) => Some(Page::Album(self.albums()[*index].clone())),
+            BrowserEntry::Album(index) => Some(Page::Album((&self.albums()[*index]).into())),
             _ => None,
         }
     }
@@ -258,9 +290,9 @@ impl PageState {
                     self.data = Some(PageData::Songs(Arc::new(songs)));
                 }
             }
-            LibraryData::Album(mut album) => {
-                self.data = Some(PageData::Songs(Arc::new(std::mem::take(&mut album.song))));
-                self.page = Page::Album(album);
+            LibraryData::Album(album) => {
+                self.page = Page::Album((&album).into());
+                self.data = Some(PageData::Songs(Arc::new(album.song)));
             }
             LibraryData::Folders(_) => unreachable!("folder trees are applied by Browser"),
             LibraryData::Search(results) => {
@@ -720,6 +752,60 @@ impl Browser {
         self.state.clamp_cursor();
     }
 
+    pub fn select_song(&mut self, id: &str) -> bool {
+        let Some(row) = self
+            .state
+            .entries
+            .iter()
+            .position(|entry| self.entry_song(entry).is_some_and(|song| song.id == id))
+        else {
+            return false;
+        };
+        self.set_cursor(row);
+        true
+    }
+
+    pub fn page_play_target(&self) -> Option<PlayTarget> {
+        match &self.state.page {
+            Page::Folder(path) => {
+                let folder = self.folder_library.as_ref()?.folder(path)?;
+                (!folder.songs.is_empty() || !folder.children.is_empty())
+                    .then(|| PlayTarget::OpenFolder(path.clone()))
+            }
+            Page::Artist(artist) if !self.state.albums().is_empty() => {
+                Some(PlayTarget::Artist(artist.clone()))
+            }
+            Page::Album(_) if !self.state.songs().is_empty() => {
+                Some(PlayTarget::OpenAlbum(self.state.song_collection()?.clone()))
+            }
+            Page::Liked if !self.state.songs().is_empty() => Some(PlayTarget::LikedSongs(
+                self.state.song_collection()?.clone(),
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn selection_play_target(&self) -> Option<PlayTarget> {
+        match self.state.entries.get(self.state.cursor) {
+            Some(BrowserEntry::Artist(index)) => {
+                Some(PlayTarget::Artist(self.state.artists()[*index].clone()))
+            }
+            Some(BrowserEntry::Album(index)) => {
+                Some(PlayTarget::Album(self.state.albums()[*index].clone()))
+            }
+            Some(BrowserEntry::Folder(path)) => Some(PlayTarget::SelectedFolder(path.clone())),
+            _ if matches!(
+                self.state.page,
+                Page::Folder(_) | Page::Album(_) | Page::Liked
+            ) =>
+            {
+                self.page_play_target()
+            }
+            Some(BrowserEntry::Song(_)) => Some(PlayTarget::Track(self.state.cursor)),
+            _ => None,
+        }
+    }
+
     pub fn selected_queue(&self, row: usize) -> Option<(Arc<Vec<Song>>, usize)> {
         let BrowserEntry::Song(index) = self.state.entries.get(row)? else {
             return None;
@@ -842,7 +928,7 @@ mod tests {
             } else {
                 browser.apply(LibraryData::Albums(vec![column_album("a")]), false);
             }
-            browser.navigate(Page::Album(column_album("a")), true);
+            browser.navigate(Page::Album((&column_album("a")).into()), true);
             assert_eq!(browser.parent().unwrap().page.id(), source.id());
             assert!(browser.back());
             assert_eq!(browser.state().page.id(), source.id());
@@ -892,7 +978,7 @@ mod tests {
             browser.accept_preview(&target, LibraryData::Album(column_album(&row.to_string())));
         }
         assert_eq!(browser.cache.len(), 32);
-        browser.navigate(Page::Album(column_album("39")), true);
+        browser.navigate(Page::Album((&column_album("39")).into()), true);
         assert_eq!(browser.parent().unwrap().albums().len(), 40);
         assert_eq!(browser.parent().unwrap().cursor, 39);
     }
@@ -1011,7 +1097,7 @@ mod tests {
             false,
         );
         browser.set_cursor(1);
-        browser.navigate(Page::Album(album(0)), true);
+        browser.navigate(Page::Album((&album(0)).into()), true);
         assert!(browser.back());
         assert!(matches!(&browser.state.page, Page::Search(query) if query == "piano"));
         assert!(browser.state.loaded());
@@ -1217,7 +1303,7 @@ mod tests {
             panic!("albums")
         };
         let albums = albums.clone();
-        browser.navigate(Page::Album(album(250)), true);
+        browser.navigate(Page::Album((&album(250)).into()), true);
 
         assert!(browser.back());
         assert!(browser.state.loaded());
@@ -1267,6 +1353,16 @@ mod tests {
         browser.navigate(Page::Folder("/music".into()), false);
         browser.apply(LibraryData::Folders(library), false);
         assert!(browser.selected_queue(0).is_none());
+        assert!(
+            matches!(browser.page_play_target(), Some(PlayTarget::OpenFolder(path)) if path == "/music")
+        );
+        assert!(
+            matches!(browser.selection_play_target(), Some(PlayTarget::SelectedFolder(path)) if path == "/music/Disc 2")
+        );
+        browser.set_cursor(2);
+        assert!(
+            matches!(browser.selection_play_target(), Some(PlayTarget::OpenFolder(path)) if path == "/music")
+        );
         let (queue, selected) = browser.selected_queue(2).unwrap();
         assert!(Arc::ptr_eq(&queue, &source));
         assert_eq!(selected, 1);

@@ -203,11 +203,12 @@ impl PlayerView {
                                         unreachable!();
                                     };
                                     let child = child.clone();
-                                    let label = "Play this folder and subfolders";
+                                    let target = PlayTarget::SelectedFolder(child.clone());
+                                    let label = target.play_button_hint();
                                     let hint = if selected == Some(row) {
-                                        shortcuts::PLAY_SELECTION.hint(label)
+                                        shortcuts::PLAY_SELECTION.hint(&label)
                                     } else {
-                                        label.to_owned()
+                                        label
                                     };
                                     view.child(
                                         row_play_button(
@@ -220,7 +221,7 @@ impl PlayerView {
                                                 cx.stop_propagation();
                                                 window.focus(&this.library_focus);
                                                 this.library.set_cursor(row);
-                                                this.play_folder(&child, cx);
+                                                this.play_target(target.clone(), cx);
                                                 this.update_columns(cx);
                                             }),
                                         ),
@@ -231,7 +232,6 @@ impl PlayerView {
                                     if this.library.focus_folder_entry(&path, &selected_entry, cx) {
                                         this.reset_navigation_ui(cx);
                                         this.open_selected(cx);
-                                        this.remember_folder(cx);
                                     }
                                 }))
                         })

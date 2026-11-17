@@ -1,6 +1,9 @@
 //! Descriptions used by keyboard help, contextual hints and button tooltips.
 //! Bindings and their descriptions live together; editing and prefix rules stay in keyboard.rs.
-use crate::keyboard::Command::{self, *};
+use crate::{
+    browser::{BrowserEntry, Page, PlayTarget},
+    keyboard::Command::{self, *},
+};
 use gpui::Keystroke;
 
 #[derive(Clone, Copy)]
@@ -242,50 +245,72 @@ pub fn help_groups() -> [(&'static str, Vec<(String, &'static str)>); 2] {
     ]
 }
 
+impl PlayTarget {
+    fn selection_hint(&self) -> Option<(&'static str, &'static str)> {
+        let label = match self {
+            Self::Artist(_) => "Play artist",
+            Self::Album(_) | Self::OpenAlbum(_) => "Play album",
+            Self::OpenFolder(_) => "Play open folder",
+            Self::SelectedFolder(_) => "Play selected folder",
+            Self::LikedSongs(_) => "Play all",
+            Self::Track(_) => return None,
+        };
+        Some(PLAY_SELECTION.footer_hint(label))
+    }
+
+    pub fn play_button_hint(&self) -> String {
+        match self {
+            Self::Artist(_) => "Play all by this artist".into(),
+            Self::Album(_) | Self::OpenAlbum(_) => PLAY_SELECTION.hint("Play album"),
+            Self::OpenFolder(_) => "Play open folder and subfolders".into(),
+            Self::SelectedFolder(_) => "Play this folder and subfolders".into(),
+            Self::LikedSongs(_) => PLAY_SELECTION.hint("Play liked songs"),
+            Self::Track(_) => OPEN.hint("Play song"),
+        }
+    }
+}
+
 pub fn footer_hints(
-    page: &crate::browser::Page,
-    selected: Option<&crate::browser::BrowserEntry>,
+    page: &Page,
+    selected: Option<&BrowserEntry>,
+    play_target: Option<&PlayTarget>,
     search_focused: bool,
     has_current: bool,
 ) -> Vec<(&'static str, &'static str)> {
-    use crate::browser::{BrowserEntry, Page};
     if matches!(page, Page::Search(_)) && search_focused {
         return vec![OPEN.footer_hint("To results")];
     }
     let mut hints = vec![MOVE.footer_hint("Move")];
+    let play_hint = play_target.and_then(PlayTarget::selection_hint);
     match page {
-        Page::Artists => hints.extend([
-            OPEN.footer_hint("Open"),
-            PLAY_SELECTION.footer_hint("Play artist"),
-        ]),
-        Page::Albums | Page::Artist(_) => hints.extend([
-            OPEN.footer_hint("Open"),
-            PLAY_SELECTION.footer_hint("Play album"),
-        ]),
+        Page::Artists | Page::Albums | Page::Artist(_) => {
+            hints.push(OPEN.footer_hint("Open"));
+            hints.extend(play_hint);
+        }
         Page::Folder(path) => {
             if let Some(entry) = selected {
-                let (enter, play) = if matches!(entry, BrowserEntry::Folder(_)) {
-                    ("Open folder", "Play selected folder")
+                let label = if matches!(entry, BrowserEntry::Folder(_)) {
+                    "Open folder"
                 } else {
-                    ("Play song", "Play open folder")
+                    "Play song"
                 };
-                hints.push(OPEN.footer_hint(enter));
+                hints.push(OPEN.footer_hint(label));
                 if !path.is_empty() {
                     hints.push(BACK.footer_hint("Parent"));
                 }
-                hints.push(PLAY_SELECTION.footer_hint(play));
+                hints.extend(play_hint);
             }
         }
-        Page::Album(_) => hints.extend([
-            OPEN.footer_hint("Play song"),
-            PLAY_SELECTION.footer_hint("Play album"),
-            LIKE.footer_hint("Like"),
-        ]),
-        Page::Liked => hints.extend([
-            OPEN.footer_hint("Play song"),
-            PLAY_SELECTION.footer_hint("Play all"),
-            LIKE.footer_hint("Unlike"),
-        ]),
+        Page::Album(_) | Page::Liked => {
+            hints.push(OPEN.footer_hint("Play song"));
+            hints.extend(play_hint);
+            let label = if matches!(page, Page::Liked) {
+                "Unlike"
+            } else {
+                "Like"
+            };
+            hints.push(LIKE.footer_hint(label));
+        }
         Page::Songs => hints.extend([OPEN.footer_hint("Play"), LIKE.footer_hint("Like")]),
         Page::Search(_) => {
             if let Some(entry) = selected {

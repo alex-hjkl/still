@@ -1,6 +1,6 @@
 //! Coordinates library navigation, loading, cached pages and retry state.
 use crate::{
-    browser::{Browser, BrowserEntry, LibraryRequest, Page},
+    browser::{AlbumPage, Browser, BrowserEntry, LibraryRequest, Page},
     failure::{Failure, RetryAction},
     library_loader::{LibraryLoader, LoadContext, LoadOutcome},
     models::Song,
@@ -19,12 +19,17 @@ pub struct LibraryChange {
     pub restored_folder: bool,
 }
 
+enum PendingSelection {
+    Folder(SavedFolder),
+    Song(String),
+}
+
 pub struct LibraryController {
     browser: Browser,
     loader: Entity<LibraryLoader>,
     preview_loader: Entity<LibraryLoader>,
     preview_failure: Option<Failure>,
-    pending_folder: Option<SavedFolder>,
+    pending_selection: Option<PendingSelection>,
     failure: Option<Failure>,
 }
 
@@ -35,7 +40,7 @@ impl LibraryController {
             loader: cx.new(|_| LibraryLoader::default()),
             preview_loader: cx.new(|_| LibraryLoader::default()),
             preview_failure: None,
-            pending_folder: None,
+            pending_selection: None,
             failure: None,
         }
     }
@@ -144,11 +149,11 @@ impl LibraryController {
         self.preview_loader.update(cx, |loader, _| loader.cancel());
         self.preview_failure = None;
         self.failure = None;
+        self.pending_selection = None;
     }
 
     pub fn clear(&mut self, cx: &mut App) {
         self.cancel_load(cx);
-        self.pending_folder = None;
         self.browser.clear();
     }
 
@@ -159,10 +164,10 @@ impl LibraryController {
             std::mem::swap(&mut self.loader, &mut self.preview_loader);
             self.failure = None;
             self.preview_failure = None;
+            self.pending_selection = None;
         } else {
             self.cancel_load(cx);
         }
-        self.pending_folder = None;
         self.browser.navigate(page, remember);
     }
 
@@ -182,12 +187,46 @@ impl LibraryController {
             |saved| Page::Folder(saved.path.clone()),
         );
         self.navigate(page, false, cx);
-        if let Some(saved) = saved {
-            if self.browser.state().loaded() {
+        self.pending_selection = saved.map(PendingSelection::Folder);
+        self.resolve_selection();
+    }
+
+    /// Returns whether revealing the song opened another page.
+    pub fn reveal_song(&mut self, song: &Song, cx: &mut App) -> bool {
+        if self.browser.select_song(&song.id) {
+            return false;
+        }
+        let page = if let Some(id) = song.album_id.as_ref().filter(|id| !id.is_empty()) {
+            Page::Album(AlbumPage {
+                id: id.clone(),
+                name: song.album.clone(),
+                artist: song.artist.clone(),
+                year: None,
+                song_count: 0,
+            })
+        } else {
+            Page::Search(song.title.clone())
+        };
+        self.navigate(page, true, cx);
+        self.pending_selection = Some(PendingSelection::Song(song.id.clone()));
+        self.resolve_selection();
+        true
+    }
+
+    fn resolve_selection(&mut self) -> bool {
+        if !self.browser.state().loaded() {
+            return false;
+        }
+        match self.pending_selection.take() {
+            Some(PendingSelection::Folder(saved)) => {
                 self.browser.restore_folder(&saved);
-            } else {
-                self.pending_folder = Some(saved);
+                true
             }
+            Some(PendingSelection::Song(id)) => {
+                self.browser.select_song(&id);
+                false
+            }
+            None => false,
         }
     }
 
@@ -196,7 +235,6 @@ impl LibraryController {
             return false;
         }
         self.cancel_load(cx);
-        self.pending_folder = None;
         true
     }
 
@@ -219,7 +257,6 @@ impl LibraryController {
             return false;
         }
         self.cancel_load(cx);
-        self.pending_folder = None;
         true
     }
 
@@ -228,7 +265,6 @@ impl LibraryController {
             return false;
         }
         self.cancel_load(cx);
-        self.pending_folder = None;
         true
     }
 
@@ -301,10 +337,7 @@ impl LibraryController {
         match result {
             Ok(data) => {
                 self.browser.apply(data, context.request.offset > 0);
-                if let Some(saved) = self.pending_folder.take() {
-                    self.browser.restore_folder(&saved);
-                    restored_folder = true;
-                }
+                restored_folder = self.resolve_selection();
             }
             Err(error) => {
                 self.failure = Some(Failure::new(

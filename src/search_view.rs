@@ -21,8 +21,8 @@ impl PlayerView {
                 return;
             }
             self.search_delay = None;
-            self.track_to_reveal = None;
             self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+            self.update_columns(cx);
         } else {
             self.remember_folder(cx);
             self.library.navigate(Page::Search(text), true, cx);
@@ -30,7 +30,6 @@ impl PlayerView {
             self.focus_library = false;
             window.focus(&self.search.focus_handle(cx));
         }
-        self.update_columns(cx);
         if self.connection.read(cx).session().is_demo() {
             self.submit_search(cx);
             return;

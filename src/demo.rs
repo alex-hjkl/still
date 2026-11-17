@@ -47,12 +47,10 @@ pub fn load(page: &Page) -> LibraryData {
                 .filter(|song| song.starred.is_some())
                 .collect(),
         ),
-        Page::Album(album) => LibraryData::Album(
-            demo_albums()
-                .into_iter()
-                .find(|candidate| candidate.id == album.id)
-                .unwrap_or(album),
-        ),
+        Page::Album(album) => demo_albums()
+            .into_iter()
+            .find(|candidate| candidate.id == album.id)
+            .map_or_else(|| LibraryData::Songs(Vec::new()), LibraryData::Album),
         Page::Folder(_) => {
             let songs = demo_albums()
                 .into_iter()

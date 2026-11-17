@@ -172,6 +172,9 @@ impl PlayerView {
         {
             self.ui_probe.borrow_mut().header_stacked = stacked;
         }
+        let play_target = (!self.library.is_loading(cx))
+            .then(|| self.library.browser().page_play_target())
+            .flatten();
         let search = || {
             div()
                 .id("library-search")
@@ -242,67 +245,15 @@ impl PlayerView {
                             )
                         },
                     )
-                    .when(
-                        !self.library.is_loading(cx)
-                            && match &self.library.browser().state().page {
-                                Page::Folder(path) => self
-                                    .library
-                                    .browser()
-                                    .folder_library()
-                                    .and_then(|library| library.folder(path))
-                                    .is_some_and(|folder| {
-                                        !folder.songs.is_empty() || !folder.children.is_empty()
-                                    }),
-                                Page::Artist(_) => {
-                                    !self.library.browser().state().albums().is_empty()
-                                }
-                                Page::Album(_) | Page::Liked => {
-                                    !self.library.browser().state().songs().is_empty()
-                                }
-                                _ => false,
-                            },
-                        |view| {
-                            view.child(
-                                toolbar_icon(
-                                    colors,
-                                    "play-page",
-                                    "play",
-                                    match self.library.browser().state().page {
-                                        Page::Folder(_) => "Play open folder and subfolders".into(),
-                                        Page::Liked => {
-                                            shortcuts::PLAY_SELECTION.hint("Play liked songs")
-                                        }
-                                        Page::Artist(_) => "Play all by this artist".into(),
-                                        _ => shortcuts::PLAY_SELECTION.hint("Play album"),
-                                    },
-                                )
+                    .when_some(play_target, |view, target| {
+                        view.child(
+                            toolbar_icon(colors, "play-page", "play", target.play_button_hint())
                                 .bg(rgb(colors.selected))
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        match &this.library.browser().state().page {
-                                            Page::Folder(path) => {
-                                                this.play_folder(&path.clone(), cx)
-                                            }
-                                            Page::Artist(artist) => this.play_collection(
-                                                Collection::Artist(artist.clone()),
-                                                cx,
-                                            ),
-                                            _ => this.play(
-                                                this.library
-                                                    .browser()
-                                                    .state()
-                                                    .song_collection()
-                                                    .cloned()
-                                                    .unwrap_or_default(),
-                                                0,
-                                                cx,
-                                            ),
-                                        }
-                                    },
-                                )),
-                            )
-                        },
-                    )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.play_target(target.clone(), cx);
+                                })),
+                        )
+                    })
                     .when(!stacked, |row| row.child(search())),
             )
             .when(stacked, |header| header.child(search()))

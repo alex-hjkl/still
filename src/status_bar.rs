@@ -8,6 +8,7 @@ impl PlayerView {
         let hints = shortcuts::footer_hints(
             &state.page,
             entries.get(state.cursor),
+            self.library.browser().selection_play_target().as_ref(),
             self.search.focus_handle(cx).is_focused(window),
             self.transport.queue().current().is_some(),
         );

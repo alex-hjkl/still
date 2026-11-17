@@ -5,24 +5,74 @@ use crate::{
     models::{Album, Artist},
 };
 
-pub(super) fn search_group_headers(state: &PageState) -> Vec<(usize, &'static str)> {
-    if !matches!(state.page, Page::Search(_)) {
-        return Vec::new();
+pub(super) struct LibraryRows {
+    entry_count: usize,
+    groups: Vec<SearchGroup>,
+}
+
+struct SearchGroup {
+    label: &'static str,
+    first_entry: usize,
+    header_row: usize,
+}
+
+enum ListRow {
+    Header(&'static str),
+    Entry(usize),
+}
+
+impl LibraryRows {
+    pub(super) fn new(state: &PageState) -> Self {
+        let mut groups = Vec::new();
+        if matches!(state.page, Page::Search(_)) {
+            let mut first_entry = 0;
+            for (count, label) in [
+                (state.artists().len(), "Artists"),
+                (state.albums().len(), "Albums"),
+                (state.songs().len(), "Songs"),
+            ] {
+                if count > 0 {
+                    groups.push(SearchGroup {
+                        label,
+                        first_entry,
+                        header_row: first_entry + groups.len(),
+                    });
+                    first_entry += count;
+                }
+            }
+        }
+        Self {
+            entry_count: state.entries().len(),
+            groups,
+        }
     }
-    let mut start = 0;
-    [
-        (state.artists().len(), "Artists"),
-        (state.albums().len(), "Albums"),
-        (state.songs().len(), "Songs"),
-    ]
-    .into_iter()
-    .filter(|(count, _)| *count > 0)
-    .map(|(count, label)| {
-        let header = (start, label);
-        start += count;
-        header
-    })
-    .collect()
+
+    fn len(&self) -> usize {
+        self.entry_count + self.groups.len()
+    }
+
+    fn row(&self, index: usize) -> ListRow {
+        let mut header_count = 0;
+        for group in &self.groups {
+            if index == group.header_row {
+                return ListRow::Header(group.label);
+            }
+            if index < group.header_row {
+                break;
+            }
+            header_count += 1;
+        }
+        ListRow::Entry(index - header_count)
+    }
+
+    pub(super) fn entry_position(&self, index: usize) -> usize {
+        index
+            + self
+                .groups
+                .iter()
+                .take_while(|group| group.first_entry <= index)
+                .count()
+    }
 }
 
 enum LibraryRow<'a> {
@@ -220,36 +270,28 @@ impl PlayerView {
             .cloned()
             .unwrap_or_default();
         let id: SharedString = format!("library-{column:?}-{:?}", state.page.id()).into();
-        let headers = search_group_headers(&state);
+        let rows = LibraryRows::new(&state);
         #[cfg(feature = "ui-tests")]
         if column == Column::Current {
-            self.ui_probe.borrow_mut().search_groups = headers
+            self.ui_probe.borrow_mut().search_groups = rows
+                .groups
                 .iter()
-                .map(|(_, label)| (*label).to_owned())
+                .map(|group| group.label.to_owned())
                 .collect();
         }
         pane = pane.child(
             uniform_list(
                 id,
-                entries.len() + headers.len(),
+                rows.len(),
                 cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                     range
-                        .map(|list_row| {
-                            let preceding_headers = headers
-                                .iter()
-                                .enumerate()
-                                .take_while(|(index, (row, _))| row + index < list_row)
-                                .count();
-                            let row = list_row - preceding_headers;
-                            if let Some((start, label)) = headers.get(preceding_headers)
-                                && *start == row
-                            {
-                                return column_header(colors, *label)
-                                    .h(px(SONG_ROW_HEIGHT))
-                                    .into_any_element();
-                            }
-                            this.library_row(&state, &entries[row], column, row, cx)
-                                .into_any_element()
+                        .map(|index| match rows.row(index) {
+                            ListRow::Header(label) => column_header(colors, label)
+                                .h(px(SONG_ROW_HEIGHT))
+                                .into_any_element(),
+                            ListRow::Entry(row) => this
+                                .library_row(&state, &entries[row], column, row, cx)
+                                .into_any_element(),
                         })
                         .collect()
                 }),
@@ -418,6 +460,52 @@ impl PlayerView {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grouped_rows_keep_selection_and_rendering_aligned_after_append() {
+        use crate::browser::{Browser, LibraryData};
+        use crate::models::SearchResults;
+
+        let mut browser = Browser::default();
+        browser.navigate(Page::Search("mix".into()), true);
+        let results = |value| serde_json::from_value::<SearchResults>(value).unwrap();
+        browser.apply(
+            LibraryData::Search(results(serde_json::json!({
+                "album": [{"id": "album", "name": "Album"}],
+                "song": [{"id": "song", "title": "Song"}]
+            }))),
+            false,
+        );
+        browser.set_cursor(1);
+        assert_eq!(
+            LibraryRows::new(browser.state()).entry_position(browser.state().cursor),
+            3
+        );
+
+        browser.apply(
+            LibraryData::Search(results(serde_json::json!({
+                "artist": [{"id": "artist", "name": "Artist"}],
+                "album": [{"id": "second-album", "name": "Second album"}]
+            }))),
+            true,
+        );
+
+        let rows = LibraryRows::new(browser.state());
+        assert_eq!(rows.entry_position(browser.state().cursor), 6);
+        assert_eq!(rows.len(), 7);
+        assert!(matches!(rows.row(0), ListRow::Header("Artists")));
+        assert!(matches!(rows.row(2), ListRow::Header("Albums")));
+        assert!(matches!(rows.row(5), ListRow::Header("Songs")));
+        for (entry, position) in [1, 3, 4, 6].into_iter().enumerate() {
+            assert_eq!(rows.entry_position(entry), position);
+            assert!(matches!(rows.row(position), ListRow::Entry(row) if row == entry));
         }
     }
 }
