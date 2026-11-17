@@ -244,9 +244,14 @@ pub fn help_groups() -> [(&'static str, Vec<(String, &'static str)>); 2] {
 
 pub fn footer_hints(
     page: &crate::browser::Page,
+    selected: Option<&crate::browser::BrowserEntry>,
+    search_focused: bool,
     has_current: bool,
 ) -> Vec<(&'static str, &'static str)> {
-    use crate::browser::Page;
+    use crate::browser::{BrowserEntry, Page};
+    if matches!(page, Page::Search(_)) && search_focused {
+        return vec![OPEN.footer_hint("To results")];
+    }
     let mut hints = vec![MOVE.footer_hint("Move")];
     match page {
         Page::Artists => hints.extend([
@@ -257,11 +262,20 @@ pub fn footer_hints(
             OPEN.footer_hint("Open"),
             PLAY_SELECTION.footer_hint("Play album"),
         ]),
-        Page::Folder(_) => hints.extend([
-            OPEN.footer_hint("Open / play"),
-            BACK.footer_hint("Parent"),
-            PLAY_SELECTION.footer_hint("Play folder"),
-        ]),
+        Page::Folder(path) => {
+            if let Some(entry) = selected {
+                let (enter, play) = if matches!(entry, BrowserEntry::Folder(_)) {
+                    ("Open folder", "Play selected folder")
+                } else {
+                    ("Play song", "Play open folder")
+                };
+                hints.push(OPEN.footer_hint(enter));
+                if !path.is_empty() {
+                    hints.push(BACK.footer_hint("Parent"));
+                }
+                hints.push(PLAY_SELECTION.footer_hint(play));
+            }
+        }
         Page::Album(_) => hints.extend([
             OPEN.footer_hint("Play song"),
             PLAY_SELECTION.footer_hint("Play album"),
@@ -274,7 +288,15 @@ pub fn footer_hints(
         ]),
         Page::Songs => hints.extend([OPEN.footer_hint("Play"), LIKE.footer_hint("Like")]),
         Page::Search(_) => {
-            hints.extend([OPEN.footer_hint("Open / play"), ESCAPE.footer_hint("Back")])
+            if let Some(entry) = selected {
+                hints.push(OPEN.footer_hint(match entry {
+                    BrowserEntry::Song(_) => "Play song",
+                    BrowserEntry::Artist(_) => "Open artist",
+                    BrowserEntry::Album(_) => "Open album",
+                    BrowserEntry::Folder(_) => unreachable!("folders are not search results"),
+                }));
+            }
+            hints.push(ESCAPE.footer_hint("Back"));
         }
     }
     if has_current {

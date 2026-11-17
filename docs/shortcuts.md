@@ -40,9 +40,11 @@ currently loaded records and updates the preview, retaining the selected record
 and scroll position. Other cached pages reload when revisited. In Folders,
 Refresh rebuilds the folder tree and returns to its root.
 
-Shift+Enter includes subfolders when playing a folder. With a song selected in
-Folders, it plays the current folder and its subfolders. In an open album or
-Liked songs, it starts the entire list from the first song.
+In Folders, use the path above the list to jump to a parent when the window
+is narrow. The header Play button plays the open folder and its subfolders.
+With a subfolder selected, Shift+Enter plays that subfolder and its contents.
+With a song selected, Shift+Enter plays the open folder and its subfolders.
+In an open album or Liked songs, Shift+Enter plays from the first song.
 
 Text fields retain normal text-editing behavior. Left / Right moves the caret
 while search is focused. Section shortcuts and Command+B remain available there.
@@ -56,15 +58,19 @@ including rows in the Folders columns. Its tooltip shows Saving… while the wri
 is pending. A failed write can be retried from its error message.
 
 The header search field searches Navidrome for artists, albums and songs across
-the entire library. Results update as you type. With the results focused, Enter
-opens an artist or album, or plays a song; Shift+Enter plays the selected item.
+the entire library. Results update as you type and appear in groups by type.
+Press Enter in the search field to focus the results. Press Enter again to
+open the selected artist or album, or to play the selected song. Shift+Enter
+plays the selected item.
 Use `e` or Load more for further results. Clear the field to return to the previous
 list and selection, keeping focus in search. Enter or Escape leaves the field;
 Escape again returns to the previous page. Going back from an artist or album
 restores the search results.
 
 A highlighted row and blue outline identify the keyboard cursor.
-The play/pause indicator identifies the current song independently. Clearing search
+The play/pause indicator identifies the current song independently. Changing
+songs leaves the browsing selection in place. Click **Show current track in
+library** in the player to select the playing song. Clearing search
 with the × button keeps focus in the field. Drag the timeline to preview a position
 and release to seek. Drag volume for continuous adjustment; click the speaker to
 mute and restore the previous level within the session.

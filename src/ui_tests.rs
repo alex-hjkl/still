@@ -19,6 +19,8 @@ pub(super) struct RenderProbe {
     pub header_stacked: bool,
     pub theme_menu_fits: Option<bool>,
     pub connection_fits: Option<bool>,
+    pub search_groups: Vec<String>,
+    pub folder_breadcrumbs: Vec<String>,
     pub columns: BTreeMap<String, String>,
     pub failures: Vec<String>,
     pub search_summary: String,
@@ -34,6 +36,10 @@ pub(super) struct RenderProbe {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum Step {
     ToggleTheme,
+    ShowCurrentTrack,
+    OpenFolderBreadcrumb {
+        path: String,
+    },
     ActivateColumn {
         column: String,
         row: usize,
@@ -174,6 +180,7 @@ struct Expected {
     cursor: Option<usize>,
     search: Option<String>,
     search_counts: Option<[usize; 3]>,
+    search_groups: Option<Vec<String>>,
     columns: Option<BTreeMap<String, String>>,
     preview_song: Option<String>,
     size: Option<[f32; 2]>,
@@ -287,10 +294,10 @@ impl Snapshot {
             .unwrap_or_default();
         let scroll = view.list_scroll.0.borrow();
         let height = f32::from(scroll.base_handle.bounds().size.height);
-        let row = scroll.last_item_size.map_or(0., |size| {
-            f32::from(size.contents.height) / view.library.browser().entries().len().max(1) as f32
-        });
-        let top = state.cursor as f32 * row + f32::from(scroll.base_handle.offset().y);
+        let row = scroll
+            .last_item_size
+            .map_or(0., |_| view.current_row_height());
+        let top = view.current_list_row() as f32 * row + f32::from(scroll.base_handle.offset().y);
         let (media_title, media_position, media_state) = view.transport.test_media_snapshot();
         let (seek_progress, seek_enabled) = view.seek_slider.read(cx).test_state();
         let (volume_slider, _) = view.volume_slider.read(cx).test_state();
@@ -415,6 +422,10 @@ impl Snapshot {
         }
         field!(theme)
             && field!(search_counts)
+            && expected
+                .search_groups
+                .as_ref()
+                .is_none_or(|groups| groups == &self.rendered.search_groups)
             && field!(theme_preference)
             && field!(system_theme_matches)
             && field!(theme_menu)
@@ -621,6 +632,24 @@ impl Run {
                     }
                     return Ok(true);
                 }
+            }
+            Step::ShowCurrentTrack => self
+                .view
+                .update(cx, |view, cx| view.show_current_track(window, cx)),
+            Step::OpenFolderBreadcrumb { path } => {
+                if !self
+                    .view
+                    .read(cx)
+                    .ui_probe
+                    .borrow()
+                    .folder_breadcrumbs
+                    .contains(path)
+                {
+                    bail!("No visible breadcrumb for {path}");
+                }
+                self.view.update(cx, |view, cx| {
+                    view.navigate(Page::Folder(path.clone()), true, cx);
+                });
             }
             Step::Key { key } => {
                 window.dispatch_keystroke(gpui::Keystroke::parse(key)?, cx);

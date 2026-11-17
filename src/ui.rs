@@ -105,6 +105,7 @@ pub struct PlayerView {
     help_scroll: gpui::ScrollHandle,
     theme_menu: Option<ThemeMenu>,
     search_delay: Option<gpui::Task<()>>,
+    track_to_reveal: Option<String>,
     seek_slider: Entity<Slider>,
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
@@ -187,6 +188,7 @@ impl PlayerView {
             help_scroll: gpui::ScrollHandle::new(),
             theme_menu: None,
             search_delay: None,
+            track_to_reveal: None,
             seek_slider,
             volume_slider,
             unmuted_volume: if initial_volume > 0. {
@@ -526,6 +528,7 @@ impl PlayerView {
 
     fn reset_navigation_ui(&mut self, cx: &mut Context<Self>) {
         self.search_delay = None;
+        self.track_to_reveal = None;
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
@@ -593,7 +596,6 @@ impl PlayerView {
         LibraryContext {
             session: self.connection.read(cx).session().clone(),
             like_revision: self.likes.read(cx).state().revision(),
-            playback_generation: self.transport.generation(),
         }
     }
 
@@ -620,10 +622,12 @@ impl PlayerView {
         if change.restored_folder {
             self.reset_navigation_ui(cx);
         }
-        self.remember_folder(cx);
-        if self.transport.generation() != change.playback_generation {
-            self.follow_current_track(cx);
+        if self.library.browser().state().loaded()
+            && let Some(id) = self.track_to_reveal.take()
+        {
+            self.select_track(&id);
         }
+        self.remember_folder(cx);
         self.update_columns(cx);
         cx.notify();
     }
@@ -732,8 +736,6 @@ impl PlayerView {
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
         self.sync_seek_slider(cx);
         self.failures.clear(&Operation::Playback);
-        self.follow_current_track(cx);
-        self.update_columns(cx);
         cx.notify();
     }
 
@@ -750,30 +752,48 @@ impl PlayerView {
         });
     }
 
-    fn follow_current_track(&mut self, cx: &gpui::App) -> bool {
-        if self.show_help || self.library.is_loading(cx) {
-            return false;
-        }
-        let Some(song) = self.transport.queue().current() else {
-            return false;
-        };
-        let entries = self.visible_entries();
-        let Some(row) = entries.iter().position(|entry| {
-            self.entry_song(entry)
-                .is_some_and(|candidate| candidate.id == song.id)
-        }) else {
+    fn select_track(&mut self, id: &str) -> bool {
+        let Some(row) = self
+            .visible_entries()
+            .iter()
+            .position(|entry| self.entry_song(entry).is_some_and(|song| song.id == id))
+        else {
             return false;
         };
         self.library.set_cursor(row);
-        let scroll = if matches!(self.library.browser().state().page, Page::Folder(_)) {
-            &self.list_scroll
-        } else {
-            self.library_scrolls
-                .entry(self.library.browser().state().page.id())
-                .or_default()
-        };
-        scroll.scroll_to_item(row, ScrollStrategy::Center);
         true
+    }
+
+    fn show_current_track(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(song) = self.transport.queue().current().cloned() else {
+            return;
+        };
+        self.show_help = false;
+        window.focus(&self.library_focus);
+        self.keyboard_active = true;
+        if !self.select_track(&song.id) {
+            let page = if let Some(id) = song.album_id.filter(|id| !id.is_empty()) {
+                Page::Album(crate::models::Album {
+                    id,
+                    name: song.album,
+                    artist: song.artist,
+                    year: None,
+                    song_count: 0,
+                    cover_art: None,
+                    song: Vec::new(),
+                })
+            } else {
+                Page::Search(song.title)
+            };
+            self.navigate(page, true, cx);
+            if self.library.browser().state().loaded() {
+                self.select_track(&song.id);
+            } else {
+                self.track_to_reveal = Some(song.id);
+            }
+        }
+        self.update_columns(cx);
+        cx.notify();
     }
 
     fn play_row(&mut self, row: usize, cx: &mut Context<Self>) {
@@ -783,6 +803,7 @@ impl PlayerView {
         if let Some((songs, index)) = self.library.browser().selected_queue(row) {
             self.library.set_cursor(row);
             self.play(songs, index, cx);
+            self.update_columns(cx);
         }
     }
 
@@ -1009,8 +1030,17 @@ impl PlayerView {
         }
     }
 
+    fn current_list_row(&self) -> usize {
+        let state = self.library.browser().state();
+        state.cursor
+            + library_columns::search_group_headers(state)
+                .into_iter()
+                .take_while(|(row, _)| *row <= state.cursor)
+                .count()
+    }
+
     fn reveal_cursor(&self) {
-        let row = self.library.browser().state().cursor;
+        let row = self.current_list_row();
         let row_top = px(self.current_row_height()) * row;
         let viewport_top = -self.list_scroll.0.borrow().base_handle.offset().y;
         let strategy = if row_top < viewport_top {
@@ -1282,7 +1312,7 @@ impl Render for PlayerView {
             if self.library.is_loading(cx) {
                 empty_state(colors, "Loading your library…")
             } else {
-                self.folder_columns(cx)
+                self.folder_columns(self.compact_library_header(window), cx)
             }
         } else {
             self.library_columns(cx)
@@ -1304,7 +1334,7 @@ impl Render for PlayerView {
                     .child(content),
             )
             .children(self.failure_banners(cx))
-            .child(self.status_bar(cx));
+            .child(self.status_bar(window, cx));
         root = root
             .child(
                 div()

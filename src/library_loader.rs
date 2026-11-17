@@ -50,7 +50,6 @@ pub struct LibraryReady;
 pub struct LoadContext {
     pub request: LibraryRequest,
     pub like_revision: u64,
-    pub playback_generation: u64,
 }
 pub struct LoadOutcome {
     pub context: LoadContext,
@@ -179,7 +178,6 @@ mod tests {
                 pages: 1,
             },
             like_revision: 4,
-            playback_generation: 7,
         }
     }
 
@@ -297,7 +295,6 @@ mod tests {
             let outcome = loader.take_outcome().unwrap();
             assert!(matches!(&outcome.context.request.page, Page::Search(query) if query == "new"));
             assert_eq!(outcome.context.like_revision, 4);
-            assert_eq!(outcome.context.playback_generation, 7);
             let LibraryData::Songs(songs) = outcome.result.unwrap().data else {
                 panic!("songs")
             };

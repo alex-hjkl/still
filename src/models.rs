@@ -40,6 +40,8 @@ pub struct Song {
     #[serde(default)]
     pub album: String,
     #[serde(default)]
+    pub album_id: Option<String>,
+    #[serde(default)]
     pub duration: u64,
     #[serde(default)]
     pub track: u32,

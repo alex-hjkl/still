@@ -1,10 +1,14 @@
 use super::*;
 
 impl PlayerView {
-    pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn status_bar(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
+        let state = self.library.browser().state();
+        let entries = self.visible_entries();
         let hints = shortcuts::footer_hints(
-            &self.library.browser().state().page,
+            &state.page,
+            entries.get(state.cursor),
+            self.search.focus_handle(cx).is_focused(window),
             self.transport.queue().current().is_some(),
         );
         #[cfg(feature = "ui-tests")]

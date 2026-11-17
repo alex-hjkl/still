@@ -21,7 +21,7 @@ impl PlayerView {
         }
     }
 
-    pub(super) fn folder_columns(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn folder_columns(&self, compact: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
         let Page::Folder(path) = &self.library.browser().state().page else {
             unreachable!();
@@ -30,6 +30,7 @@ impl PlayerView {
             return empty_state(colors, "Folders have not been loaded yet");
         }
         let parent = parent_path(path)
+            .filter(|_| !compact)
             .map(|parent| self.folder_column(parent, Column::Parent, Some(path), cx));
         let entries = self.library.browser().entries();
         let preview = match entries.get(self.library.browser().state().cursor) {
@@ -46,18 +47,9 @@ impl PlayerView {
                 ))
                 .into_any_element(),
         };
-        let parent = parent.unwrap_or_else(|| {
-            div()
-                .flex_1()
-                .h_full()
-                .flex()
-                .flex_col()
-                .child(column_message(colors, "Library root"))
-                .into_any_element()
-        });
         column_layout(
             colors,
-            Some(parent),
+            parent,
             self.folder_column(path, Column::Current, None, cx),
             preview,
         )
@@ -211,12 +203,17 @@ impl PlayerView {
                                         unreachable!();
                                     };
                                     let child = child.clone();
+                                    let label = "Play this folder and subfolders";
+                                    let hint = if selected == Some(row) {
+                                        shortcuts::PLAY_SELECTION.hint(label)
+                                    } else {
+                                        label.to_owned()
+                                    };
                                     view.child(
                                         row_play_button(
                                             colors,
                                             format!("play-folder-{child}").into(),
-                                            shortcuts::PLAY_SELECTION
-                                                .hint("Play folder and subfolders"),
+                                            hint,
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
@@ -224,6 +221,7 @@ impl PlayerView {
                                                 window.focus(&this.library_focus);
                                                 this.library.set_cursor(row);
                                                 this.play_folder(&child, cx);
+                                                this.update_columns(cx);
                                             }),
                                         ),
                                     )

@@ -78,7 +78,22 @@ impl PlayerView {
                                     ),
                             )
                             .when_some(current, |view, song| {
-                                view.child(self.like_button(song, "player-like", cx))
+                                view.child(
+                                    toolbar_icon(
+                                        colors,
+                                        "show-current-track",
+                                        "search",
+                                        "Show current track in library",
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| this.show_current_track(window, cx),
+                                    )),
+                                )
+                                .child(self.like_button(
+                                    song,
+                                    "player-like",
+                                    cx,
+                                ))
                             }),
                     )
                     .child(

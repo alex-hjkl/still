@@ -1,6 +1,75 @@
 use super::*;
 
 impl PlayerView {
+    pub(super) fn compact_library_header(&self, window: &Window) -> bool {
+        f32::from(window.viewport_size().width) - self.sidebar_width() < 700.
+    }
+
+    fn folder_breadcrumbs(&self, path: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let colors = crate::theme::colors(cx);
+        let parent = crate::folders::parent_path(path).filter(|parent| !parent.is_empty());
+        let ancestors = std::iter::once("").chain(parent);
+        #[cfg(feature = "ui-tests")]
+        {
+            self.ui_probe.borrow_mut().folder_breadcrumbs =
+                ancestors.clone().map(str::to_owned).collect();
+        }
+        let links = ancestors.map(|ancestor| {
+            let label = if ancestor.is_empty() {
+                "Folders"
+            } else {
+                file_name(ancestor)
+            };
+            let target = ancestor.to_owned();
+            div()
+                .id(SharedString::from(format!("folder-ancestor-{ancestor}")))
+                .min_w_0()
+                .rounded_sm()
+                .truncate()
+                .cursor_pointer()
+                .text_color(rgb(colors.accent))
+                .hover(move |style| style.bg(rgb(colors.hover)))
+                .tooltip({
+                    let target = target.clone();
+                    move |_, cx| {
+                        let label = if target.is_empty() {
+                            "Folders".into()
+                        } else {
+                            target.clone()
+                        };
+                        cx.new(|_| Hint::new(label)).into()
+                    }
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.navigate(Page::Folder(target.clone()), true, cx);
+                }))
+                .child(label.to_owned())
+        });
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(17.))
+            .children(links.flat_map(|link| {
+                [
+                    link.into_any_element(),
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(colors.muted))
+                        .child("/")
+                        .into_any_element(),
+                ]
+            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(file_name(path).to_owned()),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
         let subtitle = match &self.library.browser().state().page {
@@ -89,7 +158,16 @@ impl PlayerView {
             }
             _ => self.title(),
         };
-        let stacked = f32::from(window.viewport_size().width) - self.sidebar_width() < 700.;
+        let stacked = self.compact_library_header(window);
+        let heading = match &self.library.browser().state().page {
+            Page::Folder(path) if stacked && !path.is_empty() => self.folder_breadcrumbs(path, cx),
+            _ => div()
+                .text_size(px(21.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .truncate()
+                .child(title)
+                .into_any_element(),
+        };
         #[cfg(feature = "ui-tests")]
         {
             self.ui_probe.borrow_mut().header_stacked = stacked;
@@ -136,13 +214,7 @@ impl PlayerView {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(21.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .truncate()
-                                    .child(title),
-                            )
+                            .child(heading)
                             .child(
                                 div()
                                     .text_size(px(TEXT_CAPTION))
@@ -196,13 +268,11 @@ impl PlayerView {
                                     "play-page",
                                     "play",
                                     match self.library.browser().state().page {
-                                        Page::Folder(_) => shortcuts::PLAY_SELECTION
-                                            .hint("Play this folder and subfolders"),
+                                        Page::Folder(_) => "Play open folder and subfolders".into(),
                                         Page::Liked => {
                                             shortcuts::PLAY_SELECTION.hint("Play liked songs")
                                         }
-                                        Page::Artist(_) => shortcuts::PLAY_SELECTION
-                                            .hint("Play all by this artist"),
+                                        Page::Artist(_) => "Play all by this artist".into(),
                                         _ => shortcuts::PLAY_SELECTION.hint("Play album"),
                                     },
                                 )

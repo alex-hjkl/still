@@ -13,12 +13,10 @@ use gpui::{App, AppContext, Entity};
 pub struct LibraryContext {
     pub session: Session,
     pub like_revision: u64,
-    pub playback_generation: u64,
 }
 
 pub struct LibraryChange {
     pub restored_folder: bool,
-    pub playback_generation: u64,
 }
 
 pub struct LibraryController {
@@ -78,7 +76,6 @@ impl LibraryController {
                 pages: 1,
             },
             like_revision: context.like_revision,
-            playback_generation: context.playback_generation,
         };
         match context.session {
             Session::Demo => {
@@ -280,7 +277,6 @@ impl LibraryController {
         let load = LoadContext {
             request,
             like_revision: context.like_revision,
-            playback_generation: context.playback_generation,
         };
         match context.session {
             Session::Demo => {
@@ -317,9 +313,6 @@ impl LibraryController {
                 ))
             }
         }
-        LibraryChange {
-            restored_folder,
-            playback_generation: context.playback_generation,
-        }
+        LibraryChange { restored_folder }
     }
 }

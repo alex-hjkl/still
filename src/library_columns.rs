@@ -5,6 +5,26 @@ use crate::{
     models::{Album, Artist},
 };
 
+pub(super) fn search_group_headers(state: &PageState) -> Vec<(usize, &'static str)> {
+    if !matches!(state.page, Page::Search(_)) {
+        return Vec::new();
+    }
+    let mut start = 0;
+    [
+        (state.artists().len(), "Artists"),
+        (state.albums().len(), "Albums"),
+        (state.songs().len(), "Songs"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, label)| {
+        let header = (start, label);
+        start += count;
+        header
+    })
+    .collect()
+}
+
 enum LibraryRow<'a> {
     Artist(&'a Artist),
     Album(&'a Album),
@@ -200,13 +220,37 @@ impl PlayerView {
             .cloned()
             .unwrap_or_default();
         let id: SharedString = format!("library-{column:?}-{:?}", state.page.id()).into();
+        let headers = search_group_headers(&state);
+        #[cfg(feature = "ui-tests")]
+        if column == Column::Current {
+            self.ui_probe.borrow_mut().search_groups = headers
+                .iter()
+                .map(|(_, label)| (*label).to_owned())
+                .collect();
+        }
         pane = pane.child(
             uniform_list(
                 id,
-                entries.len(),
+                entries.len() + headers.len(),
                 cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                     range
-                        .map(|row| this.library_row(&state, &entries[row], column, row, cx))
+                        .map(|list_row| {
+                            let preceding_headers = headers
+                                .iter()
+                                .enumerate()
+                                .take_while(|(index, (row, _))| row + index < list_row)
+                                .count();
+                            let row = list_row - preceding_headers;
+                            if let Some((start, label)) = headers.get(preceding_headers)
+                                && *start == row
+                            {
+                                return column_header(colors, *label)
+                                    .h(px(SONG_ROW_HEIGHT))
+                                    .into_any_element();
+                            }
+                            this.library_row(&state, &entries[row], column, row, cx)
+                                .into_any_element()
+                        })
                         .collect()
                 }),
             )

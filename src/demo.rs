@@ -122,6 +122,7 @@ fn demo_albums() -> Vec<Album> {
             title: title.into(),
             artist: artist.into(),
             album: name.into(),
+            album_id: Some(format!("demo-{index}")),
             duration: 180 + track as u64 * 23,
             track: track as u32 + 1,
             disc_number: 1,

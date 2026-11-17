@@ -80,6 +80,8 @@ def scenario(launch, tracks):
                        volume=0.65, volume_slider=0.65, seek_enabled=False,
                        seek_progress_max=0, sidebar_width=208), dict(action="quit")]
     folder = "/Music/Коллекция 🎵/Очень длинное название альбома"
+    song_query = tracks[1]["title"]
+    artist_query = tracks[1]["artist"]
     return [
         expect(connected=True, loaded=True, page="artists", volume_slider=0.7,
                seek_enabled=False, seek_progress_max=0),
@@ -141,15 +143,25 @@ def scenario(launch, tracks):
         key("shift-f"), expect(current_liked=False, current_like_pending=False),
         key("cmd-1"), expect(page="artists", loaded=True),
         key("shift-enter"), expect(failures=["retry-collection"]),
-        # Finish the current track through the audio worker, then advance manually.
-        # The collection error survives the observed transition and clears on Next.
+        # The error survives auto-advance. Both auto-advance and Next leave
+        # the browsing selection where the user put it.
+        key("cmd-3"), expect(page="songs", loaded=True), key("home"),
+        dict(action="key_burst", keys=["j"] * 4),
+        expect(selected=tracks[4]["id"], preview_song=tracks[4]["id"]),
         dict(action="key_burst", keys=["right"] * 18),
-        expect(playback="playing", current_track=tracks[2]["id"],
+        expect(playback="playing", current_track=tracks[2]["id"], selected=tracks[4]["id"],
                seek_progress_max=0.01, failures=["retry-collection"]),
         key("]"), expect(playback="playing", current_track=tracks[3]["id"],
-                         seek_progress_max=0.01, failures=[]),
+                         selected=tracks[4]["id"], seek_progress_max=0.01, failures=[]),
         key("space"), expect(playback="paused"),
-        key("cmd-4"), expect(page="folders", loaded=True, path=""),
+        dict(action="show_current_track"), expect(page="songs", selected=tracks[3]["id"], visible=True),
+        key("cmd-4"), expect(page="folders", loaded=True, path="",
+                             columns=dict(current="", preview="/Music")),
+        dict(action="show_current_track"),
+        expect(page="album", loaded=True, selected=tracks[3]["id"], visible=True,
+               current_track=tracks[3]["id"], playback="paused"),
+        key("h"), expect(page="folders", path="",
+                         columns=dict(current="", preview="/Music")),
         key("l"), expect(path="/Music"),
         key("G"), key("l"), expect(path="/Music/Коллекция 🎵"),
         key("l"), expect(path=folder, selected=tracks[0]["id"]),
@@ -158,19 +170,39 @@ def scenario(launch, tracks):
         key("h"), expect(path="/Music/Коллекция 🎵"),
         key("l"), expect(path=folder, selected=tracks[1]["id"]),
         key("f1"), expect(show_help=True), key("escape"), expect(show_help=False),
-        dict(action="resize", size=[780, 640]), expect(size=[780, 640], footer_fits=True),
-        dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
+        key("cmd-b"), expect(sidebar_width=208),
+        dict(action="resize", size=[780, 640]),
+        expect(size=[780, 640], footer_fits=True, header_stacked=True,
+               columns=dict(current=folder), selected=tracks[1]["id"]),
+        dict(action="open_folder_breadcrumb", path="/Music/Коллекция 🎵"),
+        expect(path="/Music/Коллекция 🎵", selected=folder,
+               columns=dict(current="/Music/Коллекция 🎵", preview=folder)),
+        key("l"), expect(path=folder, selected=tracks[1]["id"]),
+        dict(action="resize", size=[1120, 760]),
+        expect(size=[1120, 760], columns=dict(parent="/Music/Коллекция 🎵", current=folder)),
+        key("cmd-b"), expect(sidebar_width=64),
         key("cmd-3"), expect(page="songs", loaded=True),
         key("home"), expect(selected=tracks[0]["id"]),
         key("/"), dict(action="text", text="stale"),
         expect(page="search", loaded=False, library_loading=True),
-        key("cmd-a"), dict(action="text", text="Paper"), key("enter"),
-        expect(page="search", loaded=True, library_loading=False, search="Paper",
+        key("cmd-a"), dict(action="text", text=song_query), key("enter"),
+        expect(page="search", loaded=True, library_loading=False, search=song_query,
                search_counts=[0, 0, 1], selected=tracks[1]["id"], failures=[]),
         key("escape"), expect(page="songs", loaded=True, library_loading=False,
                               selected=tracks[0]["id"]),
-        key("/"), dict(action="text", text="Paper"), expect(page="search", loaded=True, search="Paper", search_counts=[0, 0, 1]),
-        key("enter"), expect(selected=tracks[1]["id"]),
+        key("/"), dict(action="text", text=song_query), expect(page="search", loaded=True, search=song_query, search_counts=[0, 0, 1]),
+        expect(search_groups=["Songs"], footer_hints=["Enter To results"]),
+        key("enter"), expect(selected=tracks[1]["id"], visible=True,
+                             footer_hints=["j k Move", "Enter Play song", "Esc Back", "f Like current", "/ Search"]),
+        key("/"), key("cmd-a"), dict(action="text", text=artist_query),
+        expect(page="search", loaded=True, search_groups=["Artists", "Albums", "Songs"],
+               footer_hints=["Enter To results"]),
+        key("enter"), expect(cursor=0, visible=True,
+                             footer_hints=["j k Move", "Enter Open artist", "Esc Back", "f Like current", "/ Search"]),
+        key("j"), expect(cursor=1, visible=True,
+                         footer_hints=["j k Move", "Enter Open album", "Esc Back", "f Like current", "/ Search"]),
+        dict(action="key_burst", keys=["j"] * 3), expect(cursor=4, visible=True,
+            footer_hints=["j k Move", "Enter Play song", "Esc Back", "f Like current", "/ Search"]),
         key("cmd-b"), expect(sidebar_width=208),
         key("s"), expect(shuffle=True), key("-"), expect(volume=0.65, volume_slider=0.65),
         key("="), expect(volume=0.7, volume_slider=0.7),
@@ -203,6 +235,7 @@ def main():
         target = ROOT / target
     binary = target / "release/still"
     albums, tracks = library()
+    first_artist = albums[0]["artist"]
     # Reproduce incomplete Navidrome metadata; the WAV still reports its length.
     tracks[0].update(duration=0, artist="[Unknown Artist]", album="[Unknown Album]")
     for number, track in enumerate(tracks[:20], start=1):
@@ -217,7 +250,7 @@ def main():
     requests = []
     liked = set()
     stale_search_release = threading.Event()
-    artist_calls = 0
+    full_collection_calls = 0
     fail_like = True
 
     class Handler(BaseHTTPRequestHandler):
@@ -225,7 +258,7 @@ def main():
             pass
 
         def do_GET(self):
-            nonlocal artist_calls, fail_like
+            nonlocal full_collection_calls, fail_like
             parsed = urlsplit(self.path)
             method = parsed.path.rsplit("/", 1)[-1].removesuffix(".view")
             params = parse_qs(parsed.query)
@@ -233,19 +266,20 @@ def main():
             requests.append(method)
             body = {"status": "ok"}
             if method == "getArtists":
-                body["artists"] = {"index": [{"artist": [dict(id="artist-0", name="Mira Sol", albumCount=len(albums))]}]}
+                body["artists"] = {"index": [{"artist": [dict(id="artist-0", name=first_artist, albumCount=len(albums))]}]}
             elif method == "getArtist":
-                artist_calls += 1
-                # Fail the initial collection request and the one during playback.
-                if artist_calls in (1, 4):
-                    body = {"status": "failed", "error": {"code": 50}}
-                else:
-                    body["artist"] = {"album": albums}
+                body["artist"] = {"album": albums}
             elif method == "getAlbumList2":
                 body["albumList2"] = {"album": albums}
             elif method == "getAlbum":
                 album = next(album for album in albums if album["id"] == item)
-                body["album"] = dict(album, song=[track for track in tracks if track["albumId"] == item])
+                # These scenarios only request the last album when starting the full artist queue.
+                if item == albums[-1]["id"]:
+                    full_collection_calls += 1
+                if item == albums[-1]["id"] and full_collection_calls in (1, 3):
+                    body = {"status": "failed", "error": {"code": 50}}
+                else:
+                    body["album"] = dict(album, song=[track for track in tracks if track["albumId"] == item])
             elif method == "search3":
                 start = int(params.get("songOffset", ["0"])[0])
                 count = int(params.get("songCount", ["200"])[0])
@@ -255,11 +289,16 @@ def main():
                     stale_search_release.wait(timeout=5)
                     body = {"status": "failed", "error": {"code": 50}}
                 else:
-                    if query == "paper":
+                    if query == tracks[1]["title"].casefold():
                         stale_search_release.set()
                     found = [track for track in tracks if query in
                              " ".join(track.get(field, "") for field in ["title", "artist", "album"]).casefold()]
                     body["searchResult3"] = {"song": found[start:start + count]}
+                    if query == first_artist.casefold():
+                        body["searchResult3"].update(
+                            artist=[dict(id="artist-0", name=first_artist, albumCount=len(albums))],
+                            album=[album for album in albums if album["artist"] == first_artist],
+                        )
             elif method == "getStarred2":
                 body["starred2"] = {"song": [track for track in tracks if track["id"] in liked]}
             elif method == "star":

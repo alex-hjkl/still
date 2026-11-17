@@ -21,6 +21,7 @@ impl PlayerView {
                 return;
             }
             self.search_delay = None;
+            self.track_to_reveal = None;
             self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
         } else {
             self.remember_folder(cx);
