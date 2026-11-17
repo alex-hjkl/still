@@ -29,6 +29,17 @@ def scenario(launch, tracks):
     def expect(**values):
         return dict(action="expect", **values)
 
+    def scroll_selection():
+        return [
+            dict(action="resize", size=[780, 640]), expect(size=[780, 640]),
+            dict(action="key_burst", keys=["j"] * 12),
+            expect(cursor=12, visible=True, cursor_at_bottom=True),
+            key("down"), expect(cursor=13, visible=True, cursor_at_bottom=True),
+            dict(action="key_burst", keys=["k"] * 12),
+            key("up"), expect(cursor=0, visible=True),
+            dict(action="resize", size=[1120, 760]), expect(size=[1120, 760]),
+        ]
+
     if launch == 2:
         return [
             expect(connected=True, loaded=True, page="artists", volume_slider=0.7, seek_enabled=False),
@@ -81,6 +92,7 @@ def scenario(launch, tracks):
         expect(footer_hints=["j k Move", "Enter Open", "⇧ Enter Play artist", "/ Search"], footer_fits=True),
         # Without a queue, f still acts on the visible selected song.
         key("cmd-3"), expect(page="songs", loaded=True, selected=tracks[0]["id"]),
+        *scroll_selection(),
         key("f"), expect(failures=[f"retry-like-{tracks[0]['id']}"]),
         dict(action="retry", operation=f"like:{tracks[0]['id']}"),
         key("cmd-5"), expect(page="liked", loaded=True, selected=tracks[0]["id"], failures=[]),
@@ -141,6 +153,7 @@ def scenario(launch, tracks):
         key("l"), expect(path="/Music"),
         key("G"), key("l"), expect(path="/Music/Коллекция 🎵"),
         key("l"), expect(path=folder, selected=tracks[0]["id"]),
+        *scroll_selection(),
         key("j"), expect(selected=tracks[1]["id"]),
         key("h"), expect(path="/Music/Коллекция 🎵"),
         key("l"), expect(path=folder, selected=tracks[1]["id"]),
@@ -192,8 +205,8 @@ def main():
     albums, tracks = library()
     # Reproduce incomplete Navidrome metadata; the WAV still reports its length.
     tracks[0].update(duration=0, artist="[Unknown Artist]", album="[Unknown Album]")
-    for track in tracks[:5]:
-        track["path"] = f"/Music/Коллекция 🎵/Очень длинное название альбома/{track['track']:02} {track['title']}.wav"
+    for number, track in enumerate(tracks[:20], start=1):
+        track["path"] = f"/Music/Коллекция 🎵/Очень длинное название альбома/{number:02} {track['title']}.wav"
     audio = io.BytesIO()
     with wave.open(audio, "wb") as wav:
         wav.setnchannels(1)

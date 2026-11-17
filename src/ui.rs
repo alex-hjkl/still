@@ -1000,9 +1000,25 @@ impl PlayerView {
         self.library.browser().entry_song(entry)
     }
 
+    fn current_row_height(&self) -> f32 {
+        match self.library.browser().state().page {
+            Page::Artists => ARTIST_ROW_HEIGHT,
+            Page::Albums | Page::Artist(_) => ALBUM_ROW_HEIGHT,
+            Page::Folder(_) => FOLDER_ROW_HEIGHT,
+            _ => SONG_ROW_HEIGHT,
+        }
+    }
+
     fn reveal_cursor(&self) {
-        self.list_scroll
-            .scroll_to_item(self.library.browser().state().cursor, ScrollStrategy::Top);
+        let row = self.library.browser().state().cursor;
+        let row_top = px(self.current_row_height()) * row;
+        let viewport_top = -self.list_scroll.0.borrow().base_handle.offset().y;
+        let strategy = if row_top < viewport_top {
+            ScrollStrategy::Top
+        } else {
+            ScrollStrategy::Bottom
+        };
+        self.list_scroll.scroll_to_item(row, strategy);
         self.folder_preview_scroll
             .scroll_to_item(0, ScrollStrategy::Top);
     }
@@ -1077,12 +1093,7 @@ impl PlayerView {
         let count = self.visible_entries().len();
         let viewport_height =
             f32::from(self.list_scroll.0.borrow().base_handle.bounds().size.height);
-        let row_height = match self.library.browser().state().page {
-            Page::Artists => ARTIST_ROW_HEIGHT,
-            Page::Albums | Page::Artist(_) => ALBUM_ROW_HEIGHT,
-            Page::Folder(_) => FOLDER_ROW_HEIGHT,
-            _ => SONG_ROW_HEIGHT,
-        };
+        let row_height = self.current_row_height();
         let page = page_items(viewport_height, row_height);
         self.keyboard_active = true;
         match command {

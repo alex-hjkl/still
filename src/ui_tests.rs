@@ -178,6 +178,7 @@ struct Expected {
     preview_song: Option<String>,
     size: Option<[f32; 2]>,
     visible: Option<bool>,
+    cursor_at_bottom: Option<bool>,
     sidebar_width: Option<f32>,
     sidebar_icons: Option<BTreeMap<String, [f32; 2]>>,
     shortcut_hints: Option<BTreeMap<String, String>>,
@@ -235,6 +236,7 @@ struct Snapshot {
     rendered: RenderProbe,
     size: [f32; 2],
     visible: bool,
+    cursor_at_bottom: bool,
     sidebar_width: f32,
     current_track: String,
     current_liked: bool,
@@ -370,6 +372,7 @@ impl Snapshot {
                 f32::from(window.viewport_size().height),
             ],
             visible: row > 0. && top >= -1. && top + row <= height + 1.,
+            cursor_at_bottom: row > 0. && (height - top - row).abs() <= 1.,
             current_track: view
                 .transport
                 .queue()
@@ -472,6 +475,7 @@ impl Snapshot {
             && field!(cursor)
             && field!(search)
             && field!(visible)
+            && field!(cursor_at_bottom)
             && field!(sidebar_width)
             && expected.sidebar_icons.as_ref().is_none_or(|icons| {
                 icons.iter().all(|(name, center)| {
