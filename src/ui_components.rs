@@ -141,7 +141,6 @@ pub fn track_row(colors: Palette, id: usize, height: f32) -> gpui::Stateful<gpui
         .border_b_1()
         .border_color(rgb(colors.row_border))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(colors.panel)))
 }
 
 pub fn notification(colors: Palette, message: impl Into<SharedString>) -> gpui::Div {

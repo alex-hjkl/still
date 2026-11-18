@@ -10,14 +10,48 @@ pub struct Folder {
     pub songs: Arc<Vec<Song>>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy)]
+pub enum FolderEntry<'a> {
+    Folder(&'a str),
+    Song(usize),
+}
+
+impl Folder {
+    pub fn len(&self) -> usize {
+        self.children.len() + self.songs.len()
+    }
+
+    pub fn entry_at(&self, row: usize) -> Option<FolderEntry<'_>> {
+        if row < self.children.len() {
+            Some(FolderEntry::Folder(&self.children[row]))
+        } else if row < self.len() {
+            Some(FolderEntry::Song(row - self.children.len()))
+        } else {
+            None
+        }
+    }
+
+    pub fn row_of(&self, entry: FolderEntry<'_>) -> Option<usize> {
+        match entry {
+            FolderEntry::Folder(path) => self.children.iter().position(|child| child == path),
+            FolderEntry::Song(index) => {
+                (index < self.songs.len()).then(|| self.children.len() + index)
+            }
+        }
+    }
+}
+
 pub struct FolderLibrary {
+    folders: BTreeMap<String, Folder>,
+}
+
+pub struct FolderLibraryBuilder {
     folders: BTreeMap<String, Folder>,
 }
 
 // Interpret server paths independently of the desktop OS. Navidrome on Linux
 // returns absolute POSIX paths with Report Real Path; its fake paths are relative.
-pub fn validate_path(path: Option<&str>) -> Result<&str> {
+fn validate_path(path: Option<&str>) -> Result<&str> {
     let Some(path) = path else {
         bail!("{REAL_PATH_HELP}");
     };
@@ -38,38 +72,54 @@ pub fn parent_path(path: &str) -> Option<&str> {
     (!path.is_empty()).then(|| path.rsplit_once('/').map_or("", |(parent, _)| parent))
 }
 
-impl FolderLibrary {
-    pub fn from_songs(songs: Vec<Song>) -> Result<Self> {
-        let mut library = Self::default();
-        library.folders.insert(String::new(), Folder::default());
-        for song in songs {
-            let path = validate_path(song.path.as_deref())?;
-            let mut parts: Vec<_> = path.split('/').filter(|part| !part.is_empty()).collect();
-            parts.pop(); // Filename; the remaining components are real directories.
-            let mut parent = String::new();
-            for part in parts {
-                let child = format!("{parent}/{part}");
-                if !library.folders.contains_key(&child) {
-                    library.folders.insert(child.clone(), Folder::default());
-                    library
-                        .folders
-                        .get_mut(&parent)
-                        .unwrap()
-                        .children
-                        .push(child.clone());
-                }
-                parent = child;
-            }
-            Arc::make_mut(&mut library.folders.get_mut(&parent).unwrap().songs).push(song);
+impl FolderLibraryBuilder {
+    pub fn new() -> Self {
+        Self {
+            folders: BTreeMap::from([(String::new(), Folder::default())]),
         }
-        for folder in library.folders.values_mut() {
+    }
+
+    pub fn push(&mut self, song: Song) -> Result<()> {
+        let path = validate_path(song.path.as_deref())?;
+        let (directory, _) = path.rsplit_once('/').expect("validated absolute path");
+        let mut parent = String::new();
+        for part in directory.split('/').filter(|part| !part.is_empty()) {
+            let child = format!("{parent}/{part}");
+            if !self.folders.contains_key(&child) {
+                self.folders.insert(child.clone(), Folder::default());
+                self.folders
+                    .get_mut(&parent)
+                    .unwrap()
+                    .children
+                    .push(child.clone());
+            }
+            parent = child;
+        }
+        Arc::make_mut(&mut self.folders.get_mut(&parent).unwrap().songs).push(song);
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> FolderLibrary {
+        for folder in self.folders.values_mut() {
             folder
                 .children
                 .sort_by_cached_key(|path| file_name(path).to_lowercase());
             Arc::make_mut(&mut folder.songs)
                 .sort_by_cached_key(|song| song.path.as_deref().unwrap_or_default().to_lowercase());
         }
-        Ok(library)
+        FolderLibrary {
+            folders: self.folders,
+        }
+    }
+}
+
+impl FolderLibrary {
+    pub fn from_songs(songs: Vec<Song>) -> Result<Self> {
+        let mut builder = FolderLibraryBuilder::new();
+        for song in songs {
+            builder.push(song)?;
+        }
+        Ok(builder.finish())
     }
 
     pub fn folder(&self, path: &str) -> Option<&Folder> {

@@ -5484,6 +5484,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stream-download",
+ "tempfile",
  "tokio",
  "tokio-util",
  "unicode-segmentation",

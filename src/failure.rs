@@ -15,11 +15,14 @@ pub struct Failure<R = RetryAction> {
 }
 
 impl<R> Failure<R> {
+    pub fn log_error(self) -> Self {
+        diagnostics::event(&format!("Error: {}", self.message));
+        self
+    }
+
     pub fn new(message: impl Into<String>, retry: R) -> Self {
-        let message = message.into();
-        diagnostics::event(&format!("Error: {message}"));
         Self {
-            message,
+            message: message.into(),
             retry: Some(retry),
         }
     }
@@ -27,7 +30,6 @@ impl<R> Failure<R> {
 
 impl<R> From<String> for Failure<R> {
     fn from(message: String) -> Self {
-        diagnostics::event(&format!("Error: {message}"));
         Self {
             message,
             retry: None,

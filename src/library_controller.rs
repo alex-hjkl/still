@@ -106,10 +106,13 @@ impl LibraryController {
                     .accept_preview(&outcome.context.request.page, data);
             }
             Err(error) => {
-                self.preview_failure = Some(Failure::new(
-                    format!("{error:#}"),
-                    RetryAction::Library(outcome.context.request),
-                ))
+                self.preview_failure = Some(
+                    Failure::new(
+                        format!("{error:#}"),
+                        RetryAction::Library(outcome.context.request),
+                    )
+                    .log_error(),
+                )
             }
         }
     }
@@ -340,10 +343,10 @@ impl LibraryController {
                 restored_folder = self.resolve_selection();
             }
             Err(error) => {
-                self.failure = Some(Failure::new(
-                    format!("{error:#}"),
-                    RetryAction::Library(context.request),
-                ))
+                self.failure = Some(
+                    Failure::new(format!("{error:#}"), RetryAction::Library(context.request))
+                        .log_error(),
+                )
             }
         }
         LibraryChange { restored_folder }

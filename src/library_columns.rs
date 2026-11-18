@@ -178,10 +178,9 @@ impl PlayerView {
         let current = self.library_column(browser.state().clone(), Column::Current, cx);
         let preview = if let Some(state) = browser.preview() {
             self.library_column(state.clone(), Column::Preview, cx)
-        } else if let Some(entry @ BrowserEntry::Song(_)) =
-            browser.entries().get(browser.state().cursor)
+        } else if let Some(entry @ BrowserEntry::Song(_)) = browser.entry_at(browser.state().cursor)
         {
-            self.song_preview(entry, cx)
+            self.song_preview(&entry, cx)
         } else {
             div()
                 .flex_1()
@@ -330,6 +329,7 @@ impl PlayerView {
         let page_id = state.page.id();
         track_row(colors, row, row_height)
             .gap_2()
+            .hover(move |style| style.bg(rgb(colors.panel)))
             .when(selected, |view| view.bg(rgb(colors.selected)))
             .when(column == Column::Current && self.cursor_on(row), |view| {
                 view.border_1().border_color(rgb(colors.keyboard_focus))

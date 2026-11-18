@@ -1,4 +1,5 @@
 use crate::{
+    folders::{FolderLibrary, FolderLibraryBuilder},
     models::{Album, Artist, PAGE_SIZE, SearchResults, Song, sort_albums},
     requests::Cancellation,
 };
@@ -263,11 +264,8 @@ impl Navidrome {
         .context("Missing searchResult3 in the Navidrome response")
     }
 
-    pub fn folder_library(
-        &self,
-        cancellation: &Cancellation,
-    ) -> Result<crate::folders::FolderLibrary> {
-        let mut songs = Vec::new();
+    pub fn folder_library(&self, cancellation: &Cancellation) -> Result<FolderLibrary> {
+        let mut library = FolderLibraryBuilder::new();
         let mut seen = std::collections::HashSet::new();
         let mut offset = 0;
         loop {
@@ -276,12 +274,11 @@ impl Navidrome {
             cancellation.check()?;
             let count = page.len();
             for song in page {
-                // Fail early if Navidrome is still returning paths made from tags.
-                crate::folders::validate_path(song.path.as_deref())?;
-                if !seen.insert(song.id.clone()) {
+                let id = song.id.clone();
+                library.push(song)?;
+                if !seen.insert(id) {
                     bail!("The library changed while loading folders. Click Refresh folders.");
                 }
-                songs.push(song);
             }
             if count < 500 {
                 break;
@@ -289,7 +286,7 @@ impl Navidrome {
             offset += count;
         }
         cancellation.check()?;
-        crate::folders::FolderLibrary::from_songs(songs)
+        Ok(library.finish())
     }
 
     pub fn stream_url(&self, id: &str) -> Url {

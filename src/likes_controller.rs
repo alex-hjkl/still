@@ -138,7 +138,8 @@ impl LikesController {
                             song: song.clone(),
                             liked,
                         },
-                    ),
+                    )
+                    .log_error(),
                 );
                 false
             }

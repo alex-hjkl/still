@@ -693,11 +693,7 @@ impl PlayerView {
     fn play(&mut self, queue: Arc<Vec<Song>>, index: usize, cx: &mut Context<Self>) {
         self.cancel_collection(cx);
         if self.connection.read(cx).session().is_demo() {
-            self.failures.set(
-                Operation::Playback,
-                "This demo previews the interface. Connect to Navidrome to play music.".into(),
-            );
-            cx.notify();
+            self.show_demo_playback_message(cx);
             return;
         }
         if let Some(client) = self.connection.read(cx).client()
@@ -706,6 +702,15 @@ impl PlayerView {
             self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
         }
     }
+
+    fn show_demo_playback_message(&mut self, cx: &mut Context<Self>) {
+        self.failures.set(
+            Operation::Playback,
+            "This demo previews the interface. Connect to Navidrome to play music.".into(),
+        );
+        cx.notify();
+    }
+
     fn play_current(&mut self, cx: &mut Context<Self>) {
         if let Some(client) = self.connection.read(cx).client()
             && self.transport.restart(client)
@@ -799,7 +804,8 @@ impl PlayerView {
 
     fn play_collection(&mut self, collection: Collection, cx: &mut Context<Self>) {
         if self.connection.read(cx).session().is_demo() {
-            self.play(Arc::default(), 0, cx);
+            self.cancel_collection(cx);
+            self.show_demo_playback_message(cx);
             return;
         }
         if let Some(client) = self.connection.read(cx).client().cloned() {
@@ -957,10 +963,6 @@ impl PlayerView {
         self.library.browser().state().page.title()
     }
 
-    fn visible_entries(&self) -> Arc<Vec<BrowserEntry>> {
-        self.library.browser().entries()
-    }
-
     fn entry_song(&self, entry: &BrowserEntry) -> Option<&Song> {
         self.library.browser().entry_song(entry)
     }
@@ -1010,23 +1012,19 @@ impl PlayerView {
         if self.library.is_loading(cx) {
             return;
         }
-        let entries = self.visible_entries();
-        let Some(entry) = entries.get(self.library.browser().state().cursor) else {
+        let browser = self.library.browser();
+        let Some(entry) = browser.entry_at(browser.state().cursor) else {
             return;
         };
         match entry {
-            BrowserEntry::Artist(i) => self.navigate(
-                Page::Artist(self.library.browser().state().artists()[*i].clone()),
-                true,
-                cx,
-            ),
-            BrowserEntry::Album(i) => self.navigate(
-                Page::Album((&self.library.browser().state().albums()[*i]).into()),
-                true,
-                cx,
-            ),
-            BrowserEntry::Folder(path) => self.navigate(Page::Folder(path.clone()), true, cx),
-            BrowserEntry::Song(_) => self.play_row(self.library.browser().state().cursor, cx),
+            BrowserEntry::Artist(i) => {
+                self.navigate(Page::Artist(browser.state().artists()[i].clone()), true, cx)
+            }
+            BrowserEntry::Album(i) => {
+                self.navigate(Page::Album((&browser.state().albums()[i]).into()), true, cx)
+            }
+            BrowserEntry::Folder(path) => self.navigate(Page::Folder(path), true, cx),
+            BrowserEntry::Song(_) => self.play_row(browser.state().cursor, cx),
         }
     }
 
@@ -1060,7 +1058,7 @@ impl PlayerView {
             return;
         }
         use Command::*;
-        let count = self.visible_entries().len();
+        let count = self.library.browser().entry_count();
         let viewport_height =
             f32::from(self.list_scroll.0.borrow().base_handle.bounds().size.height);
         let row_height = self.current_row_height();
@@ -1132,9 +1130,10 @@ impl PlayerView {
             Like | LikeCurrent => {
                 let song = self.transport.queue().current().cloned().or_else(|| {
                     if command == Like && !self.show_help && !self.library.is_loading(cx) {
-                        self.visible_entries()
-                            .get(self.library.browser().state().cursor)
-                            .and_then(|entry| self.entry_song(entry))
+                        let browser = self.library.browser();
+                        browser
+                            .entry_at(browser.state().cursor)
+                            .and_then(|entry| self.entry_song(&entry))
                             .cloned()
                     } else {
                         None

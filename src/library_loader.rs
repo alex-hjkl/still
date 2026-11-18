@@ -384,7 +384,7 @@ mod tests {
             let result = request.run(client.clone(), &cancellation);
             assert!(loader.finish(id, result));
             assert!(!loader.is_loading());
-            assert_eq!(browser.entries().len(), 200);
+            assert_eq!(browser.entry_count(), 200);
             let outcome = loader.take_outcome().unwrap();
             let failure = Failure::new(
                 outcome.result.err().unwrap().to_string(),
@@ -400,7 +400,7 @@ mod tests {
             let outcome = loader.take_outcome().unwrap();
             assert_eq!(outcome.context.request.offset, 200);
             browser.apply(outcome.result.unwrap(), outcome.context.request.offset > 0);
-            assert_eq!(browser.entries().len(), 201);
+            assert_eq!(browser.entry_count(), 201);
             assert_eq!(browser.state().cursor, 175);
             assert!(!browser.state().more);
             if songs {

@@ -161,10 +161,13 @@ impl ConnectionController {
             Ok(None) => None,
             Err(_) => {
                 self.saved = true;
-                self.failure = Some(Failure::new(
-                    "Could not read the saved connection. You can connect manually.",
-                    ConnectionRetry::Restore,
-                ));
+                self.failure = Some(
+                    Failure::new(
+                        "Could not read the saved connection. You can connect manually.",
+                        ConnectionRetry::Restore,
+                    )
+                    .log_error(),
+                );
                 None
             }
         }
@@ -252,7 +255,7 @@ impl ConnectionController {
                 true
             }
             Err(error) => {
-                self.failure = Some(format!("{error:#}").into());
+                self.failure = Some(Failure::from(format!("{error:#}")).log_error());
                 false
             }
         }
@@ -265,14 +268,17 @@ impl ConnectionController {
                 self.failure = None;
             }
             Err(_) => {
-                self.failure = Some(Failure::new(
-                    if saved {
-                        "Could not save the connection in the credential store."
-                    } else {
-                        "Could not remove the saved connection from the credential store."
-                    },
-                    retry,
-                ));
+                self.failure = Some(
+                    Failure::new(
+                        if saved {
+                            "Could not save the connection in the credential store."
+                        } else {
+                            "Could not remove the saved connection from the credential store."
+                        },
+                        retry,
+                    )
+                    .log_error(),
+                );
             }
         }
     }

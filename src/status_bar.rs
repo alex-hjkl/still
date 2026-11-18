@@ -3,12 +3,12 @@ use super::*;
 impl PlayerView {
     pub(super) fn status_bar(&self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let state = self.library.browser().state();
-        let entries = self.visible_entries();
+        let browser = self.library.browser();
+        let state = browser.state();
         let hints = shortcuts::footer_hints(
             &state.page,
-            entries.get(state.cursor),
-            self.library.browser().selection_play_target().as_ref(),
+            browser.entry_at(state.cursor).as_ref(),
+            browser.selection_play_target().as_ref(),
             self.search.focus_handle(cx).is_focused(window),
             self.transport.queue().current().is_some(),
         );

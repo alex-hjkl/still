@@ -102,10 +102,13 @@ impl CollectionController {
                 Some(CollectionEvent::Changed)
             }
             Err(error) => {
-                self.failure = Some(Failure::new(
-                    format!("Could not play {}: {error:#}", collection.name()),
-                    RetryAction::Collection(collection),
-                ));
+                self.failure = Some(
+                    Failure::new(
+                        format!("Could not play {}: {error:#}", collection.name()),
+                        RetryAction::Collection(collection),
+                    )
+                    .log_error(),
+                );
                 Some(CollectionEvent::Changed)
             }
         }

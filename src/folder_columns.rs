@@ -1,5 +1,5 @@
 use super::*;
-use crate::folders::parent_path;
+use crate::folders::{FolderEntry, parent_path};
 
 use super::columns::{Column, column_header, column_layout, column_message};
 
@@ -9,12 +9,8 @@ impl PlayerView {
         self.folder_preview_scroll = UniformListScrollHandle::new();
         if let Page::Folder(path) = &self.library.browser().state().page
             && let Some(parent) = parent_path(path)
-            && let Some(row) = self
-                .library
-                .browser()
-                .folder_entries(parent)
-                .iter()
-                .position(|entry| matches!(entry, BrowserEntry::Folder(child) if child == path))
+            && let Some(folder) = self.library.browser().folder(parent)
+            && let Some(row) = folder.row_of(FolderEntry::Folder(path))
         {
             self.folder_parent_scroll
                 .scroll_to_item(row, ScrollStrategy::Center);
@@ -32,12 +28,12 @@ impl PlayerView {
         let parent = parent_path(path)
             .filter(|_| !compact)
             .map(|parent| self.folder_column(parent, Column::Parent, Some(path), cx));
-        let entries = self.library.browser().entries();
-        let preview = match entries.get(self.library.browser().state().cursor) {
+        let browser = self.library.browser();
+        let preview = match browser.entry_at(browser.state().cursor) {
             Some(BrowserEntry::Folder(child)) => {
-                self.folder_column(child, Column::Preview, None, cx)
+                self.folder_column(&child, Column::Preview, None, cx)
             }
-            Some(entry @ BrowserEntry::Song(_)) => self.song_preview(entry, cx),
+            Some(entry @ BrowserEntry::Song(_)) => self.song_preview(&entry, cx),
             _ => div()
                 .flex_1()
                 .min_w_0()
@@ -64,15 +60,16 @@ impl PlayerView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let colors = crate::theme::colors(cx);
-        let entries = self.library.browser().folder_entries(path);
+        let library = self
+            .library
+            .browser()
+            .folder_library()
+            .expect("loaded folders");
+        let folder = library.folder(path);
         let selected = if column == Column::Current {
             Some(self.library.browser().state().cursor)
         } else {
-            child.and_then(|child| {
-                entries
-                    .iter()
-                    .position(|entry| matches!(entry, BrowserEntry::Folder(path) if path == child))
-            })
+            child.and_then(|child| folder?.row_of(FolderEntry::Folder(child)))
         };
         let scroll = match column {
             Column::Parent => self.folder_parent_scroll.clone(),
@@ -104,12 +101,14 @@ impl PlayerView {
                 }
                 .to_owned(),
             ));
-        if entries.is_empty() {
+        let count = folder.map_or(0, |folder| folder.len());
+        if count == 0 {
             return pane
                 .child(column_message(colors, "No music in this folder"))
                 .into_any_element();
         }
         let path = path.to_owned();
+        let library = library.clone();
         let id: SharedString = format!("folder-column-{}-{path}", column as u8).into();
         let like_slot = match column {
             Column::Parent => "folder-parent-like",
@@ -119,22 +118,18 @@ impl PlayerView {
         pane = pane.child(
             uniform_list(
                 id,
-                entries.len(),
+                count,
                 cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    let library = this
-                        .library
-                        .browser()
-                        .folder_library()
-                        .expect("loaded folders");
                     let folder = library.folder(&path).expect("existing folder");
                     range
                         .map(|row| {
-                            let (name, detail, song) = match &entries[row] {
-                                BrowserEntry::Folder(child) => {
+                            let entry = folder.entry_at(row).expect("row in folder");
+                            let (name, detail, song) = match entry {
+                                FolderEntry::Folder(child) => {
                                     (file_name(child).to_owned(), String::new(), None)
                                 }
-                                BrowserEntry::Song(index) => {
-                                    let song = &folder.songs[*index];
+                                FolderEntry::Song(index) => {
+                                    let song = &folder.songs[index];
                                     (
                                         song.path
                                             .as_deref()
@@ -145,7 +140,6 @@ impl PlayerView {
                                         Some(song),
                                     )
                                 }
-                                _ => unreachable!(),
                             };
                             let folder_entry = song.is_none();
                             let active = song.is_some_and(|song| {
@@ -156,7 +150,7 @@ impl PlayerView {
                             });
                             let color = if active { colors.accent } else { colors.text };
                             let path = path.clone();
-                            let selected_entry = entries[row].clone();
+                            let selected_entry = BrowserEntry::from(entry);
                             track_row(colors, row, FOLDER_ROW_HEIGHT)
                                 .gap_2()
                                 .when(selected == Some(row), |view| view.bg(rgb(colors.selected)))

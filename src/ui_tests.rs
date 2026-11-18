@@ -278,18 +278,17 @@ impl Snapshot {
         let selected = view
             .library
             .browser()
-            .entries()
-            .get(state.cursor)
+            .entry_at(state.cursor)
             .map(|entry| match entry {
-                BrowserEntry::Folder(path) => path.clone(),
+                BrowserEntry::Folder(path) => path,
                 BrowserEntry::Song(_) => view
                     .library
                     .browser()
-                    .entry_song(entry)
+                    .entry_song(&entry)
                     .map(|song| song.id.clone())
                     .unwrap_or_default(),
-                BrowserEntry::Artist(index) => state.artists()[*index].id.clone(),
-                BrowserEntry::Album(index) => state.albums()[*index].id.clone(),
+                BrowserEntry::Artist(index) => state.artists()[index].id.clone(),
+                BrowserEntry::Album(index) => state.albums()[index].id.clone(),
             })
             .unwrap_or_default();
         let scroll = view.list_scroll.0.borrow();
@@ -306,9 +305,8 @@ impl Snapshot {
         let selected_song = view
             .library
             .browser()
-            .entries()
-            .get(state.cursor)
-            .and_then(|entry| view.library.browser().entry_song(entry));
+            .entry_at(state.cursor)
+            .and_then(|entry| view.library.browser().entry_song(&entry));
         Self {
             section: view.library.browser().section(),
             preview_loaded: view

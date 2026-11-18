@@ -202,11 +202,12 @@ impl PlaybackController {
         if let Some(error) = snapshot.error()
             && self.state.error() != Some(error)
         {
-            update.failure = Some(Failure::new(error, RetryAction::Playback(self.generation)));
+            update.failure =
+                Some(Failure::new(error, RetryAction::Playback(self.generation)).log_error());
         } else if snapshot.warning != self.state.warning
             && let Some((_, message)) = &snapshot.warning
         {
-            update.failure = Some(message.clone().into());
+            update.failure = Some(Failure::from(message.clone()).log_error());
         }
         let finished = snapshot.is_finished() && !self.state.is_finished();
         update.changed |= self.state.position.as_secs() != snapshot.position.as_secs()

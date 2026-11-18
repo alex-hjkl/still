@@ -5,10 +5,7 @@ use std::{
     fs,
     io::Write as _,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::mpsc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -113,24 +110,13 @@ impl SettingsStore {
     }
 
     fn save(&self, preferences: &Preferences) -> Result<()> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         let parent = self.path.parent().context("Missing settings directory")?;
         fs::create_dir_all(parent)?;
-        let temporary = parent.join(format!(
-            "preferences-{}-{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = (|| {
-            fs::write(&temporary, serde_json::to_vec_pretty(preferences)?)?;
-            self.preserve_corrupt()?;
-            fs::rename(&temporary, &self.path)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(temporary);
-        }
-        result
+        let temporary = tempfile::NamedTempFile::new_in(parent)?;
+        serde_json::to_writer_pretty(temporary.as_file(), preferences)?;
+        self.preserve_corrupt()?;
+        temporary.persist(&self.path)?;
+        Ok(())
     }
 
     fn preserve_corrupt(&self) -> Result<()> {
