@@ -5,11 +5,12 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use rand::{RngExt, distr::Alphanumeric};
-use reqwest::{Url, blocking::Client};
+use reqwest::{Client, Url};
 use serde::Deserialize;
 #[cfg(test)]
 use serde_json::Value;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use tokio::runtime::{Builder, Runtime};
 
 #[derive(Debug, Deserialize)]
 struct Envelope {
@@ -68,6 +69,7 @@ pub struct Navidrome {
     token: String,
     salt: String,
     http: Client,
+    runtime: Arc<Runtime>,
 }
 
 impl Navidrome {
@@ -104,7 +106,14 @@ impl Navidrome {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()?;
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("still-navidrome")
+            .enable_all()
+            .build()
+            .context("Could not start the Navidrome HTTP runtime")?;
         Ok(Self {
+            runtime: Arc::new(runtime),
             base,
             username: username.trim().into(),
             token,
@@ -131,31 +140,40 @@ impl Navidrome {
         url
     }
 
-    fn request(&self, method: &str, params: &[(&str, String)]) -> Result<ApiResponse> {
-        let response = self
-            .http
-            .get(self.url(method, params))
-            .send()
-            .map_err(reqwest::Error::without_url)
-            .context("Could not connect to Navidrome")?
-            .error_for_status()
-            .map_err(reqwest::Error::without_url)
-            .context("The server returned an HTTP error")?;
-        decode_response(
-            response
-                .json::<Envelope>()
+    fn request(
+        &self,
+        cancellation: &Cancellation,
+        method: &str,
+        params: &[(&str, String)],
+    ) -> Result<ApiResponse> {
+        self.runtime.block_on(cancellation.until_cancelled(async {
+            let response = self
+                .http
+                .get(self.url(method, params))
+                .send()
+                .await
                 .map_err(reqwest::Error::without_url)
-                .context("The server returned invalid JSON")?,
-        )
+                .context("Could not connect to Navidrome")?
+                .error_for_status()
+                .map_err(reqwest::Error::without_url)
+                .context("The server returned an HTTP error")?;
+            decode_response(
+                response
+                    .json::<Envelope>()
+                    .await
+                    .map_err(reqwest::Error::without_url)
+                    .context("The server returned invalid JSON")?,
+            )
+        }))
     }
 
     pub fn ping(&self) -> Result<()> {
-        self.request("ping", &[])?;
+        self.request(&Cancellation::default(), "ping", &[])?;
         Ok(())
     }
 
-    pub fn artists(&self) -> Result<Vec<Artist>> {
-        let body = self.request("getArtists", &[])?;
+    pub fn artists(&self, cancellation: &Cancellation) -> Result<Vec<Artist>> {
+        let body = self.request(cancellation, "getArtists", &[])?;
         let artists = body
             .artists
             .context("Missing artists in the Navidrome response")?;
@@ -167,8 +185,8 @@ impl Navidrome {
             .collect())
     }
 
-    pub fn artist_albums(&self, id: &str) -> Result<Vec<Album>> {
-        let body = self.request("getArtist", &[("id", id.into())])?;
+    pub fn artist_albums(&self, id: &str, cancellation: &Cancellation) -> Result<Vec<Album>> {
+        let body = self.request(cancellation, "getArtist", &[("id", id.into())])?;
         let mut albums = body
             .artist
             .context("Missing artist in the Navidrome response")?
@@ -178,8 +196,9 @@ impl Navidrome {
         Ok(albums)
     }
 
-    pub fn albums(&self, offset: usize) -> Result<Vec<Album>> {
+    pub fn albums(&self, offset: usize, cancellation: &Cancellation) -> Result<Vec<Album>> {
         let body = self.request(
+            cancellation,
             "getAlbumList2",
             &[
                 ("type", "byYear".into()),
@@ -196,8 +215,8 @@ impl Navidrome {
             .unwrap_or_default())
     }
 
-    pub fn album(&self, id: &str) -> Result<Album> {
-        let body = self.request("getAlbum", &[("id", id.into())])?;
+    pub fn album(&self, id: &str, cancellation: &Cancellation) -> Result<Album> {
+        let body = self.request(cancellation, "getAlbum", &[("id", id.into())])?;
         let mut album = body
             .album
             .context("Missing album in the Navidrome response")?;
@@ -207,12 +226,12 @@ impl Navidrome {
         Ok(album)
     }
 
-    pub fn songs(&self, offset: usize) -> Result<Vec<Song>> {
-        self.songs_page(offset, PAGE_SIZE)
+    pub fn songs(&self, offset: usize, cancellation: &Cancellation) -> Result<Vec<Song>> {
+        self.songs_page(offset, PAGE_SIZE, cancellation)
     }
 
-    pub fn liked_songs(&self) -> Result<Vec<Song>> {
-        let body = self.request("getStarred2", &[])?;
+    pub fn liked_songs(&self, cancellation: &Cancellation) -> Result<Vec<Song>> {
+        let body = self.request(cancellation, "getStarred2", &[])?;
         Ok(body
             .starred2
             .context("Missing starred2 in the Navidrome response")?
@@ -221,13 +240,23 @@ impl Navidrome {
     }
 
     pub fn set_liked(&self, id: &str, liked: bool) -> Result<()> {
-        self.request(if liked { "star" } else { "unstar" }, &[("id", id.into())])?;
+        self.request(
+            &Cancellation::default(),
+            if liked { "star" } else { "unstar" },
+            &[("id", id.into())],
+        )?;
         Ok(())
     }
 
-    fn songs_page(&self, offset: usize, size: usize) -> Result<Vec<Song>> {
+    fn songs_page(
+        &self,
+        offset: usize,
+        size: usize,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<Song>> {
         // Navidrome supports an empty search3 query for enumerating the library.
         let body = self.request(
+            cancellation,
             "search3",
             &[
                 ("query", "".into()),
@@ -243,12 +272,18 @@ impl Navidrome {
             .songs)
     }
 
-    pub fn search(&self, query: &str, offset: usize) -> Result<SearchResults> {
+    pub fn search(
+        &self,
+        query: &str,
+        offset: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchResults> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(SearchResults::default());
         }
         self.request(
+            cancellation,
             "search3",
             &[
                 ("query", query.into()),
@@ -270,7 +305,7 @@ impl Navidrome {
         let mut offset = 0;
         loop {
             cancellation.check()?;
-            let page = self.songs_page(offset, 500)?;
+            let page = self.songs_page(offset, 500, cancellation)?;
             cancellation.check()?;
             let count = page.len();
             for song in page {
@@ -402,7 +437,8 @@ mod tests {
         assert_eq!(song.duration, 0);
         assert_eq!(time_label(125), "2:05");
         let client = Navidrome::new("http://127.0.0.1:9", "user", "pass").unwrap();
-        let empty = client.search(" \t ", 0).unwrap();
+        let cancel = Cancellation::default();
+        let empty = client.search(" \t ", 0, &cancel).unwrap();
         assert!(empty.artists.is_empty() && empty.albums.is_empty() && empty.songs.is_empty());
     }
 
@@ -431,7 +467,7 @@ mod tests {
             if page == 0
                 && let Some(cancellation) = cancel_after_first.clone()
             {
-                response.before_reply(move || cancellation.cancel())
+                response.cancel_on_request(cancellation)
             } else {
                 response
             }
@@ -638,20 +674,21 @@ mod tests {
             response
         }));
         let client = Navidrome::new(&format!("{}/music", server.url), "user", "password").unwrap();
+        let cancel = Cancellation::default();
         client.ping().unwrap();
-        let artists = client.artists().unwrap();
+        let artists = client.artists(&cancel).unwrap();
         assert_eq!(artists.len(), 2);
         assert_eq!(artists[1].id, "artist-B");
         assert_eq!(
             client
-                .artist_albums("artist-A")
+                .artist_albums("artist-A", &cancel)
                 .unwrap()
                 .iter()
                 .map(|album| album.id.as_str())
                 .collect::<Vec<_>>(),
             ["old", "same-year-a", "same-year-z", "new"]
         );
-        let songs = client.album("new").unwrap().song;
+        let songs = client.album("new", &cancel).unwrap().song;
         assert_eq!(
             songs
                 .iter()
@@ -659,19 +696,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["s1", "s2", "s3"]
         );
-        assert_eq!(client.albums(200).unwrap()[0].id, "page-2");
-        assert_eq!(client.songs(200).unwrap()[0].id, "song-id");
-        let found = client.search("  Музыка & piano  ", 200).unwrap();
+        assert_eq!(client.albums(200, &cancel).unwrap()[0].id, "page-2");
+        assert_eq!(client.songs(200, &cancel).unwrap()[0].id, "song-id");
+        let found = client.search("  Музыка & piano  ", 200, &cancel).unwrap();
         assert_eq!(found.artists[0].id, "artist-found");
         assert_eq!(found.albums[0].id, "album-found");
         assert_eq!(found.songs[0].id, "song-found");
-        let liked = client.liked_songs().unwrap();
+        let liked = client.liked_songs(&cancel).unwrap();
         assert_eq!(liked.len(), 1);
         assert!(liked[0].starred.is_some());
         client.set_liked("song /?&", false).unwrap();
-        assert!(client.liked_songs().unwrap().is_empty());
+        assert!(client.liked_songs(&cancel).unwrap().is_empty());
         client.set_liked("song /?&", true).unwrap();
-        assert_eq!(client.liked_songs().unwrap()[0].id, "song /?&");
+        assert_eq!(client.liked_songs(&cancel).unwrap()[0].id, "song /?&");
         assert!(
             client
                 .set_liked("song /?&", false)
@@ -681,14 +718,14 @@ mod tests {
         );
         assert!(
             client
-                .artists()
+                .artists(&cancel)
                 .unwrap_err()
                 .to_string()
                 .contains("Missing artists")
         );
         assert!(
             client
-                .albums(0)
+                .albums(0, &cancel)
                 .unwrap_err()
                 .to_string()
                 .contains("invalid JSON")

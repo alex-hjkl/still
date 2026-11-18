@@ -32,13 +32,17 @@ impl LibraryRequest {
     ) -> Result<LibraryPage> {
         cancellation.check()?;
         let data = match &self.page {
-            Page::Artists => LibraryData::Artists(client.artists()?),
-            Page::Albums => LibraryData::Albums(client.albums(offset)?),
-            Page::Songs => LibraryData::Songs(client.songs(offset)?),
-            Page::Search(query) => LibraryData::Search(client.search(query, offset)?),
-            Page::Liked => LibraryData::Songs(client.liked_songs()?),
-            Page::Artist(artist) => LibraryData::Albums(client.artist_albums(&artist.id)?),
-            Page::Album(album) => LibraryData::Album(client.album(&album.id)?),
+            Page::Artists => LibraryData::Artists(client.artists(cancellation)?),
+            Page::Albums => LibraryData::Albums(client.albums(offset, cancellation)?),
+            Page::Songs => LibraryData::Songs(client.songs(offset, cancellation)?),
+            Page::Search(query) => {
+                LibraryData::Search(client.search(query, offset, cancellation)?)
+            }
+            Page::Liked => LibraryData::Songs(client.liked_songs(cancellation)?),
+            Page::Artist(artist) => {
+                LibraryData::Albums(client.artist_albums(&artist.id, cancellation)?)
+            }
+            Page::Album(album) => LibraryData::Album(client.album(&album.id, cancellation)?),
             Page::Folder(_) => LibraryData::Folders(client.folder_library(cancellation)?),
         };
         cancellation.check()?;
@@ -155,6 +159,83 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn cancelling_search_releases_the_worker_before_the_server_finishes() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            net::TcpListener,
+            sync::mpsc,
+            thread,
+            time::Duration,
+        };
+
+        for partial_body in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let client = Navidrome::new(
+                &format!("http://{}", listener.local_addr().unwrap()),
+                "u",
+                "p",
+            )
+            .unwrap();
+            let cancellation = Cancellation::default();
+            let worker_cancel = cancellation.clone();
+            let (done, result) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let request = LibraryRequest {
+                    page: Page::Search("query".into()),
+                    offset: 0,
+                    pages: 1,
+                };
+                done.send(
+                    request
+                        .run(client, &worker_cancel)
+                        .err()
+                        .map(|e| e.to_string()),
+                )
+                .unwrap();
+            });
+            let mut socket =
+                crate::test_http::accept_with_timeout(&listener, Duration::from_secs(5), || false)
+                    .unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(&socket);
+            let mut header = String::new();
+            loop {
+                header.clear();
+                assert_ne!(reader.read_line(&mut header).unwrap(), 0);
+                if header == "\r\n" {
+                    break;
+                }
+            }
+            if partial_body {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n{")
+                    .unwrap();
+            }
+            cancellation.cancel();
+            assert_eq!(
+                result
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("search worker still blocked")
+                    .as_deref(),
+                Some("Loading canceled")
+            );
+            let mut byte = [0];
+            match socket.read(&mut byte) {
+                Ok(0) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                other => panic!("cancelled connection stayed open: {other:?}"),
+            }
+            worker.join().unwrap();
+        }
+    }
 
     fn album(index: usize) -> Album {
         serde_json::from_value(

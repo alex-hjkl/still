@@ -43,6 +43,8 @@ def scenario(launch, tracks):
     if launch == 2:
         return [
             expect(connected=True, loaded=True, page="artists", volume_slider=0.7, seek_enabled=False),
+            key("shift-enter"), expect(failures=["retry-playback"], queue_len=0),
+            key("escape"), expect(failures=[]),
             key("cmd-3"), expect(page="songs", loaded=True, selected="demo-0-0"),
             dict(action="resize", size=[780, 640]), expect(size=[780, 640]),
             key("f1"), expect(show_help=True, selected_liked=True, current_track=""),
@@ -382,7 +384,10 @@ def main():
                 raise RuntimeError(result["error"])
             print(f"Launch {launch + 1}: {result['steps']} native UI steps passed", flush=True)
         diagnostic = report / "logs/still.log"
-        if "PANIC:" in diagnostic.read_text(encoding="utf-8"):
+        log_text = diagnostic.read_text(encoding="utf-8")
+        if "This demo previews the interface" in log_text:
+            raise RuntimeError(f"Demo playback hint was logged as an error; see {diagnostic}")
+        if "PANIC:" in log_text:
             raise RuntimeError(f"App logged a panic; see {diagnostic}")
         if "stream" not in requests:
             raise RuntimeError("Playback did not request any audio")

@@ -1,22 +1,30 @@
 use anyhow::{Result, bail};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(CancellationToken);
 
 impl Cancellation {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.cancel();
     }
 
     pub fn check(&self) -> Result<()> {
-        if self.0.load(Ordering::Relaxed) {
+        if self.0.is_cancelled() {
             bail!("Loading canceled");
         }
         Ok(())
+    }
+
+    pub async fn until_cancelled<T>(
+        &self,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        tokio::select! {
+            biased;
+            _ = self.0.cancelled() => bail!("Loading canceled"),
+            result = operation => result,
+        }
     }
 }
 

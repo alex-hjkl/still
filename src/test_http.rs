@@ -1,4 +1,5 @@
 //! Small scripted HTTP server shared by tests of the Navidrome adapter and callers.
+use crate::requests::Cancellation;
 use reqwest::Url;
 use serde_json::{Value, json};
 use std::{
@@ -19,7 +20,7 @@ pub struct Response {
     query: Vec<(String, String)>,
     body: String,
     check: Option<RequestCheck>,
-    before_reply: Option<Box<dyn FnOnce() + Send>>,
+    cancel_on_request: Option<Cancellation>,
 }
 
 impl Response {
@@ -33,7 +34,7 @@ impl Response {
             query: Vec::new(),
             body: json!({"subsonic-response": response}).to_string(),
             check: None,
-            before_reply: None,
+            cancel_on_request: None,
         }
     }
 
@@ -52,14 +53,12 @@ impl Response {
         self
     }
 
-    pub fn before_reply(mut self, action: impl FnOnce() + Send + 'static) -> Self {
-        self.before_reply = Some(Box::new(action));
+    pub fn cancel_on_request(mut self, cancellation: Cancellation) -> Self {
+        self.cancel_on_request = Some(cancellation);
         self
     }
 
     fn serve(self, mut socket: TcpStream) {
-        // Accepted sockets may inherit the listener's nonblocking mode.
-        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -91,11 +90,46 @@ impl Response {
                 break;
             }
         }
-        if let Some(action) = self.before_reply {
-            action();
+        if let Some(cancellation) = self.cancel_on_request {
+            cancellation.cancel();
+            return;
         }
         write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", self.body.len(), self.body).unwrap();
     }
+}
+
+pub fn accept_with_timeout(
+    listener: &TcpListener,
+    timeout: Duration,
+    stopped: impl Fn() -> bool,
+) -> Option<TcpStream> {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + timeout;
+    while !stopped() {
+        match listener.accept() {
+            Ok((socket, _)) => {
+                // Accepted sockets may inherit the listener's nonblocking mode.
+                socket.set_nonblocking(false).unwrap();
+                return Some(socket);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "expected HTTP request did not arrive within {timeout:?}"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("fixture accept failed: {error}"),
+        }
+    }
+    None
+}
+
+#[test]
+#[should_panic(expected = "expected HTTP request did not arrive")]
+fn missing_connection_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    accept_with_timeout(&listener, Duration::from_millis(10), || false);
 }
 
 pub struct Server {
@@ -108,32 +142,17 @@ impl Server {
     pub fn new(responses: impl IntoIterator<Item = Response>) -> Self {
         let responses: Vec<_> = responses.into_iter().collect();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let worker = thread::spawn(move || {
             for response in responses {
-                let deadline = Instant::now() + Duration::from_secs(5);
-                loop {
-                    if stopping.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    match listener.accept() {
-                        Ok((socket, _)) => {
-                            response.serve(socket);
-                            break;
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(
-                                Instant::now() < deadline,
-                                "expected HTTP request did not arrive"
-                            );
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(error) => panic!("fixture accept failed: {error}"),
-                    }
-                }
+                let Some(socket) = accept_with_timeout(&listener, Duration::from_secs(5), || {
+                    stopping.load(Ordering::Relaxed)
+                }) else {
+                    return;
+                };
+                response.serve(socket);
             }
         });
         Self {

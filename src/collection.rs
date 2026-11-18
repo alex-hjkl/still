@@ -23,13 +23,13 @@ impl Collection {
     pub fn songs(&self, client: &Navidrome, cancellation: &Cancellation) -> Result<Vec<Song>> {
         cancellation.check()?;
         let albums = match self {
-            Self::Artist(artist) => client.artist_albums(&artist.id)?,
+            Self::Artist(artist) => client.artist_albums(&artist.id, cancellation)?,
             Self::Album(album) => vec![album.clone()],
         };
         let mut songs = Vec::new();
         for album in albums {
             cancellation.check()?;
-            songs.extend(client.album(&album.id)?.song);
+            songs.extend(client.album(&album.id, cancellation)?.song);
         }
         cancellation.check()?;
         Ok(songs)
@@ -53,7 +53,7 @@ mod tests {
                 if index == last
                     && let Some(cancellation) = cancel_after.clone()
                 {
-                    response.before_reply(move || cancellation.cancel())
+                    response.cancel_on_request(cancellation)
                 } else {
                     response
                 }
