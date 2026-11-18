@@ -910,6 +910,14 @@ mod tests {
         assert!(snapshot.needs_restart());
     }
 
+    fn accept_audio_request(listener: &TcpListener) -> std::net::TcpStream {
+        let timeout = Duration::from_secs(5);
+        let socket = crate::test_http::accept_with_timeout(listener, timeout, || false).unwrap();
+        socket.set_read_timeout(Some(timeout)).unwrap();
+        socket.set_write_timeout(Some(timeout)).unwrap();
+        socket
+    }
+
     fn stalled_audio_server() -> (
         Url,
         tokio::sync::oneshot::Receiver<()>,
@@ -922,10 +930,7 @@ mod tests {
             .unwrap();
         let (ready, received) = tokio::sync::oneshot::channel();
         let worker = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            let mut socket = accept_audio_request(&listener);
             let mut reader = BufReader::new(socket.try_clone().unwrap());
             loop {
                 let mut line = String::new();
@@ -957,7 +962,10 @@ mod tests {
         let (url, ready, server) = stalled_audio_server();
         let token = CancellationToken::new();
         let loading = tokio::spawn(prepare_audio(url, token.clone(), Duration::from_secs(10)));
-        ready.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), ready)
+            .await
+            .expect("audio server did not send the partial response")
+            .unwrap();
         token.cancel();
         assert!(
             tokio::time::timeout(Duration::from_secs(2), loading)
@@ -978,7 +986,10 @@ mod tests {
             token.clone(),
             Duration::from_millis(250),
         ));
-        ready.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), ready)
+            .await
+            .expect("audio server did not send the partial response")
+            .unwrap();
         let error = tokio::time::timeout(Duration::from_secs(2), loading)
             .await
             .unwrap()
@@ -996,10 +1007,7 @@ mod tests {
             .parse()
             .unwrap();
         let thread = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+            let mut socket = accept_audio_request(&listener);
             let mut reader = BufReader::new(socket.try_clone().unwrap());
             loop {
                 let mut line = String::new();
@@ -1109,7 +1117,7 @@ mod tests {
         .parse()
         .unwrap();
         let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
+            let mut socket = accept_audio_request(&listener);
             let mut reader = BufReader::new(socket.try_clone().unwrap());
             loop {
                 let mut line = String::new();

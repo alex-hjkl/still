@@ -154,9 +154,11 @@ mod tests {
     use super::*;
     use crate::{
         browser::Browser,
-        failure::{Failure, RetryAction},
+        library_controller::{LibraryContext, LibraryController},
         models::{Album, Song},
+        session::Session,
     };
+    use gpui::TestAppContext;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -402,27 +404,32 @@ mod tests {
 
     #[test]
     fn going_back_cancels_the_load_without_reloading_or_replacing_cached_results() {
-        let mut browser = Browser::default();
-        browser.navigate(Page::Songs, false);
-        browser.apply(LibraryData::Songs(vec![song(0), song(1)]), false);
-        browser.set_cursor(1);
-        let cached = browser.state().song_collection().unwrap().clone();
-        browser.navigate(Page::Search("slow".into()), true);
-        let mut loader = LibraryLoader::default();
-        let (request, cancellation) = loader.begin(context(browser.state().page.clone(), 0));
+        let app = TestAppContext::single();
+        app.update(|cx| {
+            let mut library = LibraryController::new(cx);
+            library.navigate(Page::Songs, false, cx);
+            library.replace_songs(vec![song(0), song(1)]);
+            library.set_cursor(1);
+            let cached = library.browser().state().song_collection().unwrap().clone();
+            let search = Page::Search("slow".into());
+            library.navigate(search.clone(), true, cx);
+            let loader = library.loader().clone();
+            let (request, cancellation) =
+                loader.update(cx, |loader, _| loader.begin(context(search, 0)));
+            assert!(library.is_loading(cx));
 
-        assert!(browser.back());
-        loader.cancel();
-        assert!(cancellation.check().is_err());
-        assert!(!loader.finish(request, Ok(LibraryData::Songs(vec![song(99)]).into())));
-        assert!(loader.take_outcome().is_none());
-        assert!(browser.state().loaded());
-        assert!(Arc::ptr_eq(
-            &cached,
-            browser.state().song_collection().unwrap()
-        ));
-        assert_eq!(browser.state().cursor, 1);
-        assert_eq!(browser.state().songs()[1].id, "song-1");
+            assert!(library.back(cx));
+            assert!(cancellation.check().is_err());
+            assert!(!library.is_loading(cx));
+            loader.update(cx, |loader, _| {
+                assert!(!loader.finish(request, Ok(LibraryData::Songs(vec![song(99)]).into())));
+                assert!(loader.take_outcome().is_none());
+            });
+            let state = library.browser().state();
+            assert!(state.loaded());
+            assert!(Arc::ptr_eq(&cached, state.song_collection().unwrap()));
+            assert_eq!(state.songs()[state.cursor].id, "song-1");
+        });
     }
 
     #[test]
@@ -444,50 +451,67 @@ mod tests {
             } else {
                 json!({"albumList2":{"album":[{"id":"last", "name":"Альбом 200"}]}})
             };
+            let label_field = if songs { "title" } else { "name" };
+            let records: Vec<_> = (0..200)
+                .map(|i| json!({"id": format!("id-{i}"), (label_field): format!("Item {i}")}))
+                .collect();
+            let first_page = if songs {
+                json!({"searchResult3": {"song": records}})
+            } else {
+                json!({"albumList2": {"album": records}})
+            };
             let server = Server::new([
+                Response::subsonic(method, first_page).query(offset, 0),
                 Response::subsonic(method, json!({"status":"failed", "error":{"code":50}}))
                     .query(offset, 200),
                 Response::subsonic(method, success).query(offset, 200),
             ]);
             let client = Navidrome::new(&server.url, "user", "pass").unwrap();
-            let mut browser = Browser::default();
-            browser.navigate(page, false);
-            let data = if songs {
-                LibraryData::Songs((0..200).map(song).collect())
-            } else {
-                LibraryData::Albums((0..200).map(album).collect())
+            let context = || LibraryContext {
+                session: Session::Connected(client.clone()),
+                like_revision: 0,
             };
-            browser.apply(data, false);
-            browser.set_cursor(175);
-            let request = browser.more_request().unwrap();
-            let mut loader = LibraryLoader::default();
-            let (id, cancellation) = loader.begin(context(request.page.clone(), request.offset));
-            let result = request.run(client.clone(), &cancellation);
-            assert!(loader.finish(id, result));
-            assert!(!loader.is_loading());
-            assert_eq!(browser.entry_count(), 200);
-            let outcome = loader.take_outcome().unwrap();
-            let failure = Failure::new(
-                outcome.result.err().unwrap().to_string(),
-                RetryAction::Library(outcome.context.request),
-            );
-            let Some(RetryAction::Library(retry)) = failure.retry else {
-                panic!("library retry");
+            let mut app = TestAppContext::single();
+            let mut library = app.update(LibraryController::new);
+            app.update(|cx| {
+                library.navigate(page, false, cx);
+                library.load_current(context(), cx);
+            });
+            let deliver = |library: &mut LibraryController, app: &mut TestAppContext| {
+                app.run_until_parked();
+                app.update(|cx| {
+                    let outcome = library
+                        .loader()
+                        .update(cx, |loader, _| loader.take_outcome())
+                        .expect("expected HTTP completion");
+                    library.accept(outcome);
+                });
             };
-            let (id, cancellation) = loader.begin(context(retry.page.clone(), retry.offset));
-            assert!(loader.is_loading());
-            let result = retry.run(client, &cancellation);
-            assert!(loader.finish(id, result));
-            let outcome = loader.take_outcome().unwrap();
-            assert_eq!(outcome.context.request.offset, 200);
-            browser.apply(outcome.result.unwrap(), outcome.context.request.offset > 0);
+            deliver(&mut library, &mut app);
+            app.update(|cx| {
+                library.set_cursor(175);
+                library.load_more(context(), cx);
+            });
+            deliver(&mut library, &mut app);
+            assert!(library.failure().is_some());
+            assert_eq!(library.browser().entry_count(), 200);
+            app.update(|cx| {
+                library.retry(context(), cx);
+                assert!(library.is_loading(cx));
+            });
+            deliver(&mut library, &mut app);
+            assert!(library.failure().is_none());
+            let browser = library.browser();
             assert_eq!(browser.entry_count(), 201);
-            assert_eq!(browser.state().cursor, 175);
-            assert!(!browser.state().more);
+            let state = browser.state();
+            assert_eq!(state.cursor, 175);
+            assert!(!state.more);
             if songs {
-                assert_eq!(browser.state().songs()[200].id, "last");
+                assert_eq!(state.songs()[state.cursor].id, "id-175");
+                assert_eq!(state.songs()[200].id, "last");
             } else {
-                assert_eq!(browser.state().albums()[200].id, "last");
+                assert_eq!(state.albums()[state.cursor].id, "id-175");
+                assert_eq!(state.albums()[200].id, "last");
             }
             server.finish();
         }
