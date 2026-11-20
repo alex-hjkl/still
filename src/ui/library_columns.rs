@@ -133,18 +133,29 @@ impl<'a> LibraryRow<'a> {
 }
 
 impl PlayerView {
-    fn prepare_library_scrolls(&mut self) {
+    pub(super) fn prepare_column_scrolls(&mut self) {
         let browser = self.library.browser();
-        let retained: std::collections::HashSet<_> = browser.retained_pages().collect();
-        self.library_scrolls.retain(|id, _| retained.contains(id));
-        for state in std::iter::once(browser.state())
-            .chain(browser.parent())
-            .chain(browser.preview())
-        {
-            self.library_scrolls.entry(state.page.id()).or_default();
+        let mut visible = vec![browser.state().page.id()];
+        if let Page::Folder(path) = &browser.state().page {
+            if let Some(parent) = crate::folders::parent_path(path) {
+                visible.push(PageId::Folder(parent.to_owned()));
+            }
+            if let Some(BrowserEntry::Folder(child)) = browser.entry_at(browser.state().cursor) {
+                visible.push(PageId::Folder(child));
+            }
+        } else {
+            if let Some(parent) = browser.parent() {
+                visible.push(parent.page.id());
+            }
+            if let Some(preview) = browser.preview() {
+                visible.push(preview.page.id());
+            }
         }
-        if !matches!(browser.state().page, Page::Folder(_)) {
-            self.list_scroll = self.library_scrolls[&browser.state().page.id()].clone();
+        let mut retained: std::collections::HashSet<_> = browser.retained_pages().collect();
+        retained.extend(visible.iter().cloned());
+        self.column_scrolls.retain(|id, _| retained.contains(id));
+        for id in visible {
+            self.column_scrolls.entry(id).or_default();
         }
     }
 
@@ -161,7 +172,7 @@ impl PlayerView {
                 this.columns_update_pending = false;
                 let context = this.library_context(cx);
                 this.library.sync_preview(context, cx);
-                this.prepare_library_scrolls();
+                this.prepare_column_scrolls();
                 this.reveal_cursor();
                 this.remember_folder(cx);
                 cx.notify();
@@ -263,11 +274,7 @@ impl PlayerView {
                 .child(column_message(colors, message))
                 .into_any_element();
         }
-        let scroll = self
-            .library_scrolls
-            .get(&state.page.id())
-            .cloned()
-            .unwrap_or_default();
+        let scroll = self.column_scroll(&state.page.id());
         let id: SharedString = format!("library-{column:?}-{:?}", state.page.id()).into();
         let rows = LibraryRows::new(&state);
         #[cfg(feature = "ui-tests")]
@@ -428,7 +435,10 @@ impl PlayerView {
             Column::Parent => self.library.browser().parent(),
             Column::Preview => self.library.browser().preview(),
         };
-        let Some(state) = state.filter(|state| state.page.id() == *page && state.loaded()) else {
+        let Some(state) = state.filter(|state| {
+            state.page.id() == *page
+                && (state.loaded() || (column == Column::Parent && state.has_data()))
+        }) else {
             return;
         };
         if row >= state.entries().len() {
@@ -436,7 +446,24 @@ impl PlayerView {
         }
         let target = state.page.clone();
         match column {
-            Column::Parent => self.back(cx),
+            Column::Parent => {
+                self.remember_folder(cx);
+                if self.library.back(cx) {
+                    self.library.set_cursor(row);
+                    if matches!(
+                        self.library.browser().entry_at(row),
+                        Some(BrowserEntry::Song(_))
+                    ) {
+                        self.play_row(row, cx);
+                        self.navigation_changed(cx);
+                    } else {
+                        self.open_selected(cx);
+                    }
+                    self.update_columns(cx);
+                    cx.notify();
+                }
+                return;
+            }
             Column::Preview => self.navigate(target, true, cx),
             Column::Current => {}
         }

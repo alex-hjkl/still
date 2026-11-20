@@ -291,7 +291,8 @@ impl Snapshot {
                 BrowserEntry::Album(index) => state.albums()[index].id.clone(),
             })
             .unwrap_or_default();
-        let scroll = view.list_scroll.0.borrow();
+        let scroll_handle = view.current_scroll();
+        let scroll = scroll_handle.0.borrow();
         let height = f32::from(scroll.base_handle.bounds().size.height);
         let row = scroll
             .last_item_size
@@ -763,13 +764,13 @@ impl Run {
             Step::Retry { operation } => {
                 let target = match operation.as_str() {
                     operation if operation.starts_with("like:") => {
-                        FailureTarget::Operation(Operation::Like(operation[5..].to_owned()))
+                        FailureTarget::Like(operation[5..].to_owned())
                     }
                     "connection" => FailureTarget::Connection,
-                    "library" => FailureTarget::Operation(Operation::Library),
+                    "library" => FailureTarget::Library,
                     "preview" => FailureTarget::Preview,
-                    "collection" => FailureTarget::Operation(Operation::Collection),
-                    "playback" => FailureTarget::Operation(Operation::Playback),
+                    "collection" => FailureTarget::Collection,
+                    "playback" => FailureTarget::Playback,
                     _ => bail!("Unknown retry operation"),
                 };
                 self.view.update(cx, |view, cx| view.retry(target, cx));

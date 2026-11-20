@@ -9,8 +9,36 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 #[cfg(test)]
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{sync::OnceLock, time::Duration};
 use tokio::runtime::{Builder, Runtime};
+
+pub(crate) fn http_client() -> Result<&'static Client> {
+    static HTTP_CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    HTTP_CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("Could not create the HTTP client: {error}"))
+}
+
+pub(crate) fn http_runtime() -> Result<&'static Runtime> {
+    static HTTP_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
+    HTTP_RUNTIME
+        .get_or_init(|| {
+            Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("still-http")
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("Could not start the HTTP runtime: {error}"))
+}
 
 #[derive(Debug, Deserialize)]
 struct Envelope {
@@ -68,8 +96,6 @@ pub struct Navidrome {
     username: String,
     token: String,
     salt: String,
-    http: Client,
-    runtime: Arc<Runtime>,
 }
 
 impl Navidrome {
@@ -102,23 +128,11 @@ impl Navidrome {
             .map(char::from)
             .collect();
         let token = auth_token(password, &salt);
-        let http = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()?;
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("still-navidrome")
-            .enable_all()
-            .build()
-            .context("Could not start the Navidrome HTTP runtime")?;
         Ok(Self {
-            runtime: Arc::new(runtime),
             base,
             username: username.trim().into(),
             token,
             salt,
-            http,
         })
     }
 
@@ -146,10 +160,11 @@ impl Navidrome {
         method: &str,
         params: &[(&str, String)],
     ) -> Result<ApiResponse> {
-        self.runtime.block_on(cancellation.until_cancelled(async {
-            let response = self
-                .http
+        let http = http_client()?;
+        http_runtime()?.block_on(cancellation.until_cancelled(async {
+            let response = http
                 .get(self.url(method, params))
+                .timeout(Duration::from_secs(30))
                 .send()
                 .await
                 .map_err(reqwest::Error::without_url)

@@ -52,7 +52,7 @@ where practical; views adapt user input and asynchronous results to those models
 - `likes_controller.rs`: optimistic like writes, per-song tasks and retry state.
   Actions require an explicit Session; Disconnected cannot act as a local demo.
   Resetting the connection invalidates completions from the previous generation.
-- `media.rs`, `media_macos.rs`: native media commands and Now Playing metadata.
+- `media/mod.rs`, `media/macos.rs`: native media commands and Now Playing metadata.
 - `connection.rs`: connection controller owning authentication, credential persistence,
   operation identities, Session and connection failures. It emits connection events for the view.
   `credentials.rs` adapts the system credential store.
@@ -72,32 +72,32 @@ where practical; views adapt user input and asynchronous results to those models
   inputs, sliders and tooltips.
 - `settings.rs`, `diagnostics.rs`: background preferences persistence and diagnostics.
 - `slider.rs`: reusable GPUI slider with pointer state and preview/change events.
-- `ui.rs`: application view and coordination of controllers and visual state.
+- `ui/mod.rs`: application view and coordination of controllers and visual state.
   Construction creates the view, attaches its subscriptions, then initializes
   playback controls, polling and the initial connection or demo page.
 - `ui_components.rs`: shared buttons, rows, notifications, icons, tooltips and empty states.
   Live tooltips subscribe to controller events, so a pending like's label updates
-  even while the pointer stays over the button. `ui.rs` owns the shared like button
+  even while the pointer stays over the button. `ui/mod.rs` owns the shared like button
   used by library rows, folder columns, track details and the player.
 - `icons.rs`: embedded SVG asset lookup for Phosphor icons and the Still mark.
   `artwork.rs` loads and caches covers, crops nonsquare images to a centered square
   before GPUI painting, and renders placeholders and the themed app mark.
 - `demo.rs`: pure local demo records and loading without GPUI or a Navidrome server.
-- `theme_picker.rs`: mouse and keyboard appearance selection, restoring the
+- `ui/theme_picker.rs`: mouse and keyboard appearance selection, restoring the
   previous focus when its menu closes.
-- `library_view.rs`, `sidebar.rs`: library header and sidebar rendering.
-- `columns.rs`: shared parent/current/preview layout and column headers.
-  `library_columns.rs` adapts artists, albums, songs and mixed search results to
+- `ui/library_view.rs`, `ui/sidebar.rs`: library header and sidebar rendering.
+- `ui/columns.rs`: shared parent/current/preview layout and column headers.
+  `ui/library_columns.rs` adapts artists, albums, songs and mixed search results to
   a typed LibraryRow model and one row renderer, with independently retained scroll
   handles keyed by PageId. Navigation changes schedule one deferred reconciliation
   of the final state per GPUI effect cycle; transient intermediate pages do not
   start previews or reset another page's scroll handle.
   Parent and preview rows use the same navigation/playback actions as the active
-  list. `track_details.rs` renders the shared song details for all browsing modes.
-- `search_view.rs`: library-wide search input, debounce and mixed artist, album
+  list. `ui/track_details.rs` renders the shared song details for all browsing modes.
+- `ui/search_view.rs`: library-wide search input, debounce and mixed artist, album
   and song results, using the same navigation and playback actions as library lists.
-- `connection_screen.rs`, `folder_columns.rs`, `player_bar.rs`, `keyboard_help.rs`:
-  screen rendering and view-specific interactions. `status_bar.rs` renders
+- `ui/connection_screen.rs`, `ui/folder_columns.rs`, `ui/player_bar.rs`, `ui/keyboard_help.rs`:
+  screen rendering and view-specific interactions. `ui/status_bar.rs` renders
   contextual shortcuts, collection loading status and Load more.
 - `layout.rs`: shared row, player and sidebar dimensions, plus keyboard page sizing.
 - `navigation.rs`: section ordering, persisted identities, names, icons and shortcuts.
@@ -106,10 +106,9 @@ where practical; views adapt user input and asynchronous results to those models
   Vim prefix rules; `input.rs` handles native Unicode/IME text input.
   Player commands target the playback queue independently of browser selection.
   With an empty queue, Space and `f` fall back to the visible selection, except under help.
-- `requests.rs`, `failure.rs`: stale-request cancellation and operation-specific Retry.
-  Library, playback and each song's like have independent failures. Navigation clears
-  only the library failure; connection failures belong to the connection controller.
-- `ui_tests.rs`: opt-in native regression driver and paced demo captions, excluded
+- `requests.rs`, `failure.rs`: stale-request cancellation and typed operation-specific Retry.
+  Library, collection, playback, connection and each song's like own their independent failures.
+- `ui/ui_tests.rs`: opt-in native regression driver and paced demo captions, excluded
   from normal releases. `scripts/demo_fixture.py` supplies synthetic demo records
   and original covers; `scripts/demo_recording.py` captures the isolated window.
 - `test_http.rs`: test-only scripted HTTP fixtures with expected paths, query

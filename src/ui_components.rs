@@ -184,11 +184,3 @@ pub fn empty_state(colors: Palette, message: &str) -> gpui::AnyElement {
         .child(message.to_owned())
         .into_any_element()
 }
-
-pub fn toolbar_button(
-    colors: Palette,
-    id: &'static str,
-    glyph: &'static str,
-) -> gpui::Stateful<gpui::Div> {
-    icon_button(colors, id, icon(glyph, colors.muted))
-}

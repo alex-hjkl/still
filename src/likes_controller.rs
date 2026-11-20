@@ -1,13 +1,14 @@
 //! Runs optimistic like writes and rejects completions from an old connection.
-use crate::{
-    failure::{Failure, Failures, Operation, RetryAction},
-    likes::Likes,
-    models::Song,
-    session::Session,
-};
+use crate::{failure::Failure, likes::Likes, models::Song, session::Session};
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
 use std::collections::HashMap;
+
+#[derive(Clone)]
+pub struct LikeRetry {
+    pub song: Song,
+    pub liked: bool,
+}
 
 pub enum LikesEvent {
     Changed,
@@ -19,7 +20,7 @@ pub struct LikesController {
     state: Likes,
     generation: u64,
     tasks: HashMap<String, Task<()>>,
-    failures: Failures,
+    failures: Vec<(String, Failure<LikeRetry>)>,
 }
 
 impl EventEmitter<LikesEvent> for LikesController {}
@@ -29,12 +30,29 @@ impl LikesController {
         &self.state
     }
 
-    pub fn failures(&self) -> &Failures {
+    pub fn failures(&self) -> &[(String, Failure<LikeRetry>)] {
         &self.failures
     }
 
     pub fn dismiss_failures(&mut self) {
-        self.failures = Failures::default();
+        self.failures.clear();
+    }
+
+    fn clear_failure(&mut self, id: &str) {
+        self.failures.retain(|(candidate, _)| candidate != id);
+    }
+
+    fn set_failure(&mut self, id: String, failure: Failure<LikeRetry>) {
+        self.clear_failure(&id);
+        self.failures.push((id, failure));
+    }
+
+    fn take_failure(&mut self, id: &str) -> Option<Failure<LikeRetry>> {
+        let index = self
+            .failures
+            .iter()
+            .position(|(candidate, _)| candidate == id)?;
+        Some(self.failures.remove(index).1)
     }
 
     pub fn reset(&mut self) {
@@ -64,11 +82,9 @@ impl LikesController {
         if !session.is_active() {
             return;
         }
-        let action = self
-            .failures
-            .take(&Operation::Like(id.to_owned()))
-            .and_then(|failure| failure.retry);
-        if let Some(RetryAction::Like { song, liked }) = action {
+        if let Some(LikeRetry { song, liked }) =
+            self.take_failure(id).and_then(|failure| failure.retry)
+        {
             self.set(session, song, liked, cx);
         }
     }
@@ -84,7 +100,7 @@ impl LikesController {
     }
 
     fn send(&mut self, session: &Session, song: Song, liked: bool, cx: &mut Context<Self>) {
-        self.failures.clear(&Operation::Like(song.id.clone()));
+        self.clear_failure(&song.id);
         let client = match session {
             Session::Disconnected => return,
             Session::Demo => {
@@ -126,15 +142,15 @@ impl LikesController {
         self.state.finish(song, result.is_ok());
         match result {
             Ok(()) => {
-                self.failures.clear(&Operation::Like(song.id.clone()));
+                self.clear_failure(&song.id);
                 true
             }
             Err(error) => {
-                self.failures.set(
-                    Operation::Like(song.id.clone()),
+                self.set_failure(
+                    song.id.clone(),
                     Failure::new(
                         format!("Could not save the like for “{}”: {error:#}", song.title),
-                        RetryAction::Like {
+                        LikeRetry {
                             song: song.clone(),
                             liked,
                         },
@@ -202,8 +218,8 @@ mod tests {
         assert!(!controller.state().is_liked(&song));
         assert!(!controller.state().is_pending(&song.id));
         assert!(matches!(
-            controller.failures().iter().next().unwrap().1.retry,
-            Some(RetryAction::Like { liked: true, .. })
+            controller.failures().first().unwrap().1.retry,
+            Some(LikeRetry { liked: true, .. })
         ));
     }
 }

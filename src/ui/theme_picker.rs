@@ -88,7 +88,7 @@ impl PlayerView {
             ThemePreference::Latte => "sun",
             ThemePreference::Macchiato => "moon",
         };
-        toolbar_button(colors, "toggle-theme", glyph)
+        icon_button(colors, "toggle-theme", icon(glyph, colors.muted))
             .when(self.theme_menu.is_none(), |view| {
                 view.tooltip(|_, cx| cx.new(|_| Hint::new("Appearance")).into())
             })

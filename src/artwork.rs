@@ -4,10 +4,7 @@ use gpui::{
     App, Asset, ImageCacheError, IntoElement, ObjectFit, RenderImage, Window, div, img, prelude::*,
     px, rgb, svg,
 };
-use std::{
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 struct Cover;
 
@@ -55,25 +52,19 @@ impl Asset for Cover {
     ) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
         cx.background_executor().spawn(async move {
             let result = (|| -> Result<Arc<RenderImage>> {
-                static HTTP: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
-                let http = HTTP
-                    .get_or_init(|| {
-                        reqwest::blocking::Client::builder()
-                            .connect_timeout(Duration::from_secs(10))
-                            .timeout(Duration::from_secs(15))
-                            .build()
-                            .map_err(|error| error.to_string())
-                    })
-                    .as_ref()
-                    .map_err(|error| anyhow::anyhow!("{error}"))?;
-                let bytes = http
-                    .get(url)
-                    .send()
-                    .map_err(reqwest::Error::without_url)?
-                    .error_for_status()
-                    .map_err(reqwest::Error::without_url)?
-                    .bytes()
-                    .map_err(reqwest::Error::without_url)?;
+                let http = crate::api::http_client()?;
+                let bytes = crate::api::http_runtime()?.block_on(async move {
+                    http.get(url)
+                        .timeout(Duration::from_secs(15))
+                        .send()
+                        .await
+                        .map_err(reqwest::Error::without_url)?
+                        .error_for_status()
+                        .map_err(reqwest::Error::without_url)?
+                        .bytes()
+                        .await
+                        .map_err(reqwest::Error::without_url)
+                })?;
                 let data = cover_pixels(&bytes)?;
                 Ok(Arc::new(RenderImage::new(vec![image::Frame::new(data)])))
             })();

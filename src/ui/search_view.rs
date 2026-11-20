@@ -21,7 +21,7 @@ impl PlayerView {
                 return;
             }
             self.search_delay = None;
-            self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+            self.current_scroll().scroll_to_item(0, ScrollStrategy::Top);
             self.update_columns(cx);
         } else {
             self.remember_folder(cx);

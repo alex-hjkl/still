@@ -348,7 +348,17 @@ fn run_audio_worker(
     let mut volume = initial_volume.clamp(0., 1.);
     let mut paused = false;
     loop {
-        match receiver.recv_timeout(Duration::from_millis(150)) {
+        let active = sink
+            .as_ref()
+            .is_some_and(|sink| !sink.is_paused() && !sink.empty());
+        let command = if active {
+            receiver.recv_timeout(Duration::from_millis(150))
+        } else {
+            receiver
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+        match command {
             Ok(Command::Play(id, url)) => {
                 generation = id;
                 seeking = Seeking::default();

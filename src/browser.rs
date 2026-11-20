@@ -288,14 +288,8 @@ impl PageState {
                 }
             }
             LibraryData::Songs(songs) => {
-                if let Some(PageData::Songs(current) | PageData::Search { songs: current, .. }) =
-                    &mut self.data
-                {
-                    if append {
-                        Arc::make_mut(current).extend(songs);
-                    } else {
-                        *current = Arc::new(songs);
-                    }
+                if append && let Some(PageData::Songs(current)) = &mut self.data {
+                    Arc::make_mut(current).extend(songs);
                 } else {
                     self.data = Some(PageData::Songs(Arc::new(songs)));
                 }
@@ -407,6 +401,11 @@ impl Browser {
             .chain(&self.cache)
             .chain(&self.preview)
             .map(|state| state.page.id())
+            .chain(
+                self.folder_states
+                    .keys()
+                    .map(|path| PageId::Folder(path.clone())),
+            )
     }
 
     pub fn preview(&self) -> Option<&PageState> {
@@ -609,7 +608,7 @@ impl Browser {
         // Keep navigation positions while discarding the freshness of cached data.
         self.state.stale = true;
         self.state.more = false;
-        for state in &mut self.cache {
+        for state in self.history.iter_mut().chain(&mut self.cache) {
             state.stale = true;
         }
         self.preview = None;
@@ -1375,5 +1374,28 @@ mod tests {
         assert!(browser.back());
         assert!(!browser.state.loaded());
         assert!(matches!(browser.request().page, Page::Albums));
+    }
+
+    #[test]
+    fn refresh_also_invalidates_ancestor_history_while_preserving_its_rows_and_cursor() {
+        let mut browser = Browser::default();
+        browser.navigate(Page::Albums, false);
+        browser.apply(
+            LibraryData::Albums(vec![column_album("a"), column_album("b")]),
+            false,
+        );
+        browser.set_cursor(1);
+        browser.navigate(Page::Album((&column_album("b")).into()), true);
+        browser.apply(LibraryData::Album(column_album("b")), false);
+
+        browser.refresh();
+        assert!(!browser.state().loaded());
+        assert!(browser.parent().unwrap().has_data());
+        assert!(!browser.parent().unwrap().loaded());
+
+        assert!(browser.back());
+        assert!(!browser.state().loaded());
+        assert_eq!(browser.state().cursor, 1);
+        assert_eq!(browser.state().albums()[1].id, "b");
     }
 }

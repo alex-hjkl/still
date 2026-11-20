@@ -34,10 +34,9 @@ pub fn seek_position(seconds: f64, duration: u64) -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
-#[path = "media_macos.rs"]
-mod platform;
+mod macos;
 #[cfg(target_os = "macos")]
-pub use platform::SystemMedia;
+pub use macos::SystemMedia;
 
 #[cfg(not(target_os = "macos"))]
 pub struct SystemMedia;

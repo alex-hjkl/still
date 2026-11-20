@@ -31,7 +31,6 @@ const ICONS: &[(&str, &[u8])] = &[
     ("previous", include_bytes!("../assets/icons/previous.svg")),
     ("next", include_bytes!("../assets/icons/next.svg")),
     ("back", include_bytes!("../assets/icons/back.svg")),
-    ("forward", include_bytes!("../assets/icons/forward.svg")),
     ("volume", include_bytes!("../assets/icons/volume.svg")),
     (
         "volume-muted",
@@ -39,8 +38,6 @@ const ICONS: &[(&str, &[u8])] = &[
     ),
     ("search", include_bytes!("../assets/icons/search.svg")),
     ("logout", include_bytes!("../assets/icons/logout.svg")),
-    ("plus", include_bytes!("../assets/icons/plus.svg")),
-    ("minus", include_bytes!("../assets/icons/minus.svg")),
     ("refresh", include_bytes!("../assets/icons/refresh.svg")),
     (
         "sidebar-expand",

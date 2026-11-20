@@ -5,7 +5,6 @@ use crate::{
     collection_controller::{CollectionController, CollectionEvent},
     connection::{Activity, ConnectionController, ConnectionEvent},
     credentials::Connection,
-    failure::{Failures, Operation, RetryAction},
     folders::file_name,
     input::{InputEvent, TextInput},
     keyboard::{Command, Keys, moved_cursor, section_hints},
@@ -33,38 +32,25 @@ use std::{sync::Arc, time::Duration};
 
 use crate::ui_components::{
     Hint, button, count_label, empty_state, icon, icon_button, icon_sized, notification,
-    row_play_button, toolbar_button, toolbar_icon, track_row, wordmark,
+    row_play_button, toolbar_icon, track_row, wordmark,
 };
-#[path = "connection_screen.rs"]
-mod connection_screen;
-#[path = "theme_picker.rs"]
-mod theme_picker;
-use theme_picker::ThemeMenu;
-#[path = "columns.rs"]
 mod columns;
-#[path = "folder_columns.rs"]
+mod connection_screen;
 mod folder_columns;
-#[path = "keyboard_help.rs"]
 mod keyboard_help;
-#[path = "library_columns.rs"]
 mod library_columns;
-#[path = "track_details.rs"]
+mod library_view;
+mod player_bar;
+mod search_view;
+mod sidebar;
+mod status_bar;
+mod theme_picker;
 mod track_details;
 #[cfg(feature = "ui-tests")]
-#[path = "ui_tests.rs"]
 mod ui_tests;
+use theme_picker::ThemeMenu;
 #[cfg(feature = "ui-tests")]
 pub(crate) use ui_tests::start_ui_test;
-#[path = "library_view.rs"]
-mod library_view;
-#[path = "player_bar.rs"]
-mod player_bar;
-#[path = "search_view.rs"]
-mod search_view;
-#[path = "sidebar.rs"]
-mod sidebar;
-#[path = "status_bar.rs"]
-mod status_bar;
 
 // Single-line labels use truncate(), which also disables wrapping. In GPUI 0.2.2,
 // text_ellipsis() alone can reuse shortened text runs during wrapped layout and
@@ -72,9 +58,12 @@ mod status_bar;
 
 #[derive(Clone)]
 enum FailureTarget {
-    Preview,
     Connection,
-    Operation(Operation),
+    Library,
+    Preview,
+    Collection,
+    Playback,
+    Like(String),
 }
 
 enum CollectionFailurePolicy {
@@ -96,11 +85,8 @@ pub struct PlayerView {
     keyboard_active: bool,
     keys: Keys,
     connection_scroll: gpui::ScrollHandle,
-    list_scroll: UniformListScrollHandle,
-    library_scrolls: std::collections::HashMap<PageId, UniformListScrollHandle>,
+    column_scrolls: std::collections::HashMap<PageId, UniformListScrollHandle>,
     columns_update_pending: bool,
-    folder_parent_scroll: UniformListScrollHandle,
-    folder_preview_scroll: UniformListScrollHandle,
     show_help: bool,
     help_scroll: gpui::ScrollHandle,
     theme_menu: Option<ThemeMenu>,
@@ -109,7 +95,6 @@ pub struct PlayerView {
     volume_slider: Entity<Slider>,
     unmuted_volume: f32,
     likes: Entity<LikesController>,
-    failures: Failures,
     transport: PlaybackController,
     settings: Settings,
     #[cfg(feature = "ui-tests")]
@@ -178,11 +163,8 @@ impl PlayerView {
             keyboard_active: false,
             keys: Keys::default(),
             connection_scroll: gpui::ScrollHandle::new(),
-            list_scroll: UniformListScrollHandle::new(),
-            library_scrolls: Default::default(),
+            column_scrolls: Default::default(),
             columns_update_pending: false,
-            folder_parent_scroll: UniformListScrollHandle::new(),
-            folder_preview_scroll: UniformListScrollHandle::new(),
             show_help: false,
             help_scroll: gpui::ScrollHandle::new(),
             theme_menu: None,
@@ -195,7 +177,6 @@ impl PlayerView {
                 0.7
             },
             likes,
-            failures: Failures::default(),
             transport: PlaybackController::new(initial_volume, initial_shuffle),
             settings,
             #[cfg(feature = "ui-tests")]
@@ -437,14 +418,13 @@ impl PlayerView {
         }
         self.remember_folder(cx);
         self.library.clear(cx);
-        self.library_scrolls.clear();
+        self.column_scrolls.clear();
         self.cancel_collection(cx);
         self.reset_navigation_ui(cx);
         self.transport.disconnect();
         self.sync_seek_slider(cx);
         self.connection
             .update(cx, |connection, cx| connection.disconnect(cx));
-        self.failures = Failures::default();
         self.likes.update(cx, |likes, _| likes.reset());
         self.password.update(cx, |field, cx| field.clear(cx));
         window.focus(&self.password.focus_handle(cx));
@@ -452,41 +432,41 @@ impl PlayerView {
     }
 
     fn failure_banners(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let mut failures: Vec<_> = self
-            .failures
-            .iter()
-            .chain(self.likes.read(cx).failures().iter())
-            .map(|(operation, failure)| {
-                (
-                    FailureTarget::Operation(operation.clone()),
-                    failure.message.clone(),
-                    failure.retry.is_some(),
-                )
-            })
-            .collect();
+        let mut failures = Vec::new();
+        if let Some(failure) = self.connection.read(cx).failure() {
+            failures.push((
+                FailureTarget::Connection,
+                failure.message.clone(),
+                failure.retry.is_some(),
+            ));
+        }
+        if let Some(failure) = self.transport.failure() {
+            failures.push((
+                FailureTarget::Playback,
+                failure.message.clone(),
+                failure.retry.is_some(),
+            ));
+        }
+        failures.extend(self.likes.read(cx).failures().iter().map(|(id, failure)| {
+            (
+                FailureTarget::Like(id.clone()),
+                failure.message.clone(),
+                failure.retry.is_some(),
+            )
+        }));
         if let Some(failure) = self.library.failure() {
             failures.push((
-                FailureTarget::Operation(Operation::Library),
+                FailureTarget::Library,
                 failure.message.clone(),
                 failure.retry.is_some(),
             ));
         }
         if let Some(failure) = self.collections.read(cx).failure() {
             failures.push((
-                FailureTarget::Operation(Operation::Collection),
+                FailureTarget::Collection,
                 failure.message.clone(),
                 failure.retry.is_some(),
             ));
-        }
-        if let Some(failure) = self.connection.read(cx).failure() {
-            failures.insert(
-                0,
-                (
-                    FailureTarget::Connection,
-                    failure.message.clone(),
-                    failure.retry.is_some(),
-                ),
-            );
         }
         failures
             .into_iter()
@@ -505,10 +485,10 @@ impl PlayerView {
         let id: SharedString = match &target {
             FailureTarget::Preview => "retry-preview".into(),
             FailureTarget::Connection => "retry-connection".into(),
-            FailureTarget::Operation(Operation::Library) => "retry-library".into(),
-            FailureTarget::Operation(Operation::Collection) => "retry-collection".into(),
-            FailureTarget::Operation(Operation::Playback) => "retry-playback".into(),
-            FailureTarget::Operation(Operation::Like(id)) => format!("retry-like-{id}").into(),
+            FailureTarget::Library => "retry-library".into(),
+            FailureTarget::Collection => "retry-collection".into(),
+            FailureTarget::Playback => "retry-playback".into(),
+            FailureTarget::Like(id) => format!("retry-like-{id}").into(),
         };
         #[cfg(feature = "ui-tests")]
         self.ui_probe.borrow_mut().failures.push(id.to_string());
@@ -528,11 +508,9 @@ impl PlayerView {
         self.keys.reset();
         self.show_help = false;
         self.focus_library = true;
-        if matches!(self.library.browser().state().page, Page::Folder(_)) {
-            self.list_scroll = UniformListScrollHandle::new();
-        }
+        self.prepare_column_scrolls();
+        self.center_folder_parent();
         self.update_columns(cx);
-        self.reset_folder_columns();
         let text = match &self.library.browser().state().page {
             Page::Search(query) => query.clone(),
             _ => String::new(),
@@ -655,35 +633,28 @@ impl PlayerView {
                 self.connection
                     .update(cx, |connection, cx| connection.retry(cx));
             }
-            FailureTarget::Operation(Operation::Collection) => {
+            FailureTarget::Collection => {
                 if let Some(client) = self.connection.read(cx).client().cloned() {
                     self.collections
                         .update(cx, |collections, cx| collections.retry(client, cx));
                 }
             }
-            FailureTarget::Operation(Operation::Like(id)) => {
+            FailureTarget::Like(id) => {
                 let session = self.connection.read(cx).session().clone();
                 self.likes
                     .update(cx, |likes, cx| likes.retry(&session, &id, cx));
             }
-            FailureTarget::Operation(Operation::Library) => {
+            FailureTarget::Library => {
                 let context = self.library_context(cx);
                 if let Some(outcome) = self.library.retry(context, cx) {
                     self.accept_library(outcome, cx);
                 }
             }
-            FailureTarget::Operation(operation) => {
-                let action = self
-                    .failures
-                    .take(&operation)
-                    .and_then(|failure| failure.retry);
-                match action {
-                    Some(RetryAction::Playback(generation))
-                        if self.transport.generation() == generation =>
-                    {
-                        self.play_current(cx)
-                    }
-                    _ => {}
+            FailureTarget::Playback => {
+                if let Some(client) = self.connection.read(cx).client()
+                    && self.transport.retry(client)
+                {
+                    self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
                 }
             }
         }
@@ -704,20 +675,11 @@ impl PlayerView {
     }
 
     fn show_demo_playback_message(&mut self, cx: &mut Context<Self>) {
-        self.failures.set(
-            Operation::Playback,
-            "This demo previews the interface. Connect to Navidrome to play music.".into(),
-        );
+        self.transport
+            .set_message("This demo previews the interface. Connect to Navidrome to play music.");
         cx.notify();
     }
 
-    fn play_current(&mut self, cx: &mut Context<Self>) {
-        if let Some(client) = self.connection.read(cx).client()
-            && self.transport.restart(client)
-        {
-            self.playback_changed(CollectionFailurePolicy::Dismiss, cx);
-        }
-    }
     fn playback_changed(
         &mut self,
         collection_failure: CollectionFailurePolicy,
@@ -730,7 +692,7 @@ impl PlayerView {
             });
         self.seek_slider.update(cx, |slider, cx| slider.cancel(cx));
         self.sync_seek_slider(cx);
-        self.failures.clear(&Operation::Playback);
+        self.transport.dismiss_failure();
         cx.notify();
     }
 
@@ -907,9 +869,6 @@ impl PlayerView {
         } else if update.changed {
             self.sync_seek_slider(cx);
         }
-        if let Some(failure) = update.failure {
-            self.failures.set(Operation::Playback, failure);
-        }
         if update.changed {
             cx.notify();
         }
@@ -981,18 +940,25 @@ impl PlayerView {
         library_columns::LibraryRows::new(state).entry_position(state.cursor)
     }
 
+    fn column_scroll(&self, id: &PageId) -> UniformListScrollHandle {
+        self.column_scrolls.get(id).cloned().unwrap_or_default()
+    }
+
+    fn current_scroll(&self) -> UniformListScrollHandle {
+        self.column_scroll(&self.library.browser().state().page.id())
+    }
+
     fn reveal_cursor(&self) {
+        let scroll = self.current_scroll();
         let row = self.current_list_row();
         let row_top = px(self.current_row_height()) * row;
-        let viewport_top = -self.list_scroll.0.borrow().base_handle.offset().y;
+        let viewport_top = -scroll.0.borrow().base_handle.offset().y;
         let strategy = if row_top < viewport_top {
             ScrollStrategy::Top
         } else {
             ScrollStrategy::Bottom
         };
-        self.list_scroll.scroll_to_item(row, strategy);
-        self.folder_preview_scroll
-            .scroll_to_item(0, ScrollStrategy::Top);
+        scroll.scroll_to_item(row, strategy);
     }
 
     fn cursor_on(&self, row: usize) -> bool {
@@ -1059,8 +1025,15 @@ impl PlayerView {
         }
         use Command::*;
         let count = self.library.browser().entry_count();
-        let viewport_height =
-            f32::from(self.list_scroll.0.borrow().base_handle.bounds().size.height);
+        let viewport_height = f32::from(
+            self.current_scroll()
+                .0
+                .borrow()
+                .base_handle
+                .bounds()
+                .size
+                .height,
+        );
         let row_height = self.current_row_height();
         let page = page_items(viewport_height, row_height);
         self.keyboard_active = true;
@@ -1107,7 +1080,7 @@ impl PlayerView {
                 } else if matches!(self.library.browser().state().page, Page::Search(_)) {
                     self.back(cx);
                 } else {
-                    self.failures = Failures::default();
+                    self.transport.dismiss_failure();
                     self.library.dismiss_failure();
                     self.collections
                         .update(cx, |collections, _| collections.dismiss_failure());

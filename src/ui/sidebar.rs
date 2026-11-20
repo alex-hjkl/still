@@ -132,10 +132,13 @@ impl PlayerView {
         let hints = window.is_window_active() && section_hints(window.modifiers());
         let server_label = self.connection.read(cx).session().server_label();
         #[cfg(feature = "ui-tests")]
-        let server_label = if std::env::var_os("STILL_DEMO_CAPTURE").is_some() {
-            "Demo library".to_owned()
-        } else {
-            server_label
+        let server_label = {
+            static DEMO_CAPTURE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *DEMO_CAPTURE.get_or_init(|| std::env::var_os("STILL_DEMO_CAPTURE").is_some()) {
+                "Demo library".to_owned()
+            } else {
+                server_label
+            }
         };
         let disconnect_label = if self.connection.read(cx).saved {
             "Disconnect & forget"

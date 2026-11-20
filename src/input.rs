@@ -108,14 +108,12 @@ impl TextInput {
     }
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.reset();
-        cx.emit(InputEvent::Change);
         cx.notify();
     }
     pub fn set_value(&mut self, value: String, cx: &mut Context<Self>) {
         self.reset();
         self.selected_range = value.len()..value.len();
         self.content = value.into();
-        cx.emit(InputEvent::Change);
         cx.notify();
     }
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
@@ -216,7 +214,7 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace("\n", " "), window, cx);
+            self.replace_text_in_range(None, &sanitize_single_line(&text), window, cx);
         }
     }
 
@@ -250,6 +248,14 @@ impl TextInput {
         }
     }
 
+    fn display_offset(&self, byte_offset: usize) -> usize {
+        display_offset(&self.content, self.secret, byte_offset)
+    }
+
+    fn content_offset(&self, display_offset: usize) -> usize {
+        content_offset(&self.content, self.secret, display_offset)
+    }
+
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         if self.content.is_empty() {
             return 0;
@@ -265,13 +271,8 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        let mut index = line
-            .closest_index_for_x(position.x - bounds.left())
-            .min(self.content.len());
-        while !self.content.is_char_boundary(index) {
-            index -= 1;
-        }
-        index
+        let index = line.closest_index_for_x(position.x - bounds.left());
+        self.content_offset(index)
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -473,13 +474,12 @@ impl EntityInputHandler for TextInput {
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        let start = self.display_offset(range.start);
+        let end = self.display_offset(range.end);
         Some(Bounds::from_corners(
+            point(bounds.left() + last_layout.x_for_index(start), bounds.top()),
             point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
+                bounds.left() + last_layout.x_for_index(end),
                 bounds.bottom(),
             ),
         ))
@@ -494,12 +494,8 @@ impl EntityInputHandler for TextInput {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
 
-        let mut utf8_index = last_layout
-            .index_for_x(line_point.x)?
-            .min(self.content.len());
-        while !self.content.is_char_boundary(utf8_index) {
-            utf8_index -= 1;
-        }
+        let display_index = last_layout.index_for_x(line_point.x)?;
+        let utf8_index = self.content_offset(display_index);
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -568,7 +564,7 @@ impl Element for TextElement {
         } else {
             (
                 if input.secret {
-                    "*".repeat(content.len()).into()
+                    masked_secret(&content).into()
                 } else {
                     content
                 },
@@ -585,13 +581,15 @@ impl Element for TextElement {
             strikethrough: None,
         };
         let runs = if let Some(marked_range) = input.marked_range.as_ref() {
+            let start = input.display_offset(marked_range.start);
+            let end = input.display_offset(marked_range.end);
             vec![
                 TextRun {
-                    len: marked_range.start,
+                    len: start,
                     ..run.clone()
                 },
                 TextRun {
-                    len: marked_range.end - marked_range.start,
+                    len: end.saturating_sub(start),
                     underline: Some(UnderlineStyle {
                         color: Some(run.color),
                         thickness: px(1.0),
@@ -600,7 +598,7 @@ impl Element for TextElement {
                     ..run.clone()
                 },
                 TextRun {
-                    len: display_text.len() - marked_range.end,
+                    len: display_text.len().saturating_sub(end),
                     ..run
                 },
             ]
@@ -616,7 +614,7 @@ impl Element for TextElement {
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
 
-        let cursor_pos = line.x_for_index(cursor);
+        let cursor_pos = line.x_for_index(input.display_offset(cursor));
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
@@ -629,17 +627,13 @@ impl Element for TextElement {
                 )),
             )
         } else {
+            let start = input.display_offset(selected_range.start);
+            let end = input.display_offset(selected_range.end);
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
+                        point(bounds.left() + line.x_for_index(start), bounds.top()),
+                        point(bounds.left() + line.x_for_index(end), bounds.bottom()),
                     ),
                     rgba(colors.selection),
                 )),
@@ -755,7 +749,9 @@ impl Render for TextInput {
                         .child("×")
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.clear(cx);
+                            this.reset();
+                            cx.emit(InputEvent::Change);
+                            cx.notify();
                             window.focus(&this.focus_handle);
                             cx.stop_propagation();
                         })),
@@ -767,5 +763,62 @@ impl Render for TextInput {
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+fn sanitize_single_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
+fn masked_secret(content: &str) -> String {
+    "*".repeat(content.graphemes(true).count())
+}
+
+fn display_offset(content: &str, secret: bool, byte_offset: usize) -> usize {
+    let clamped = byte_offset.min(content.len());
+    if !secret {
+        return clamped;
+    }
+    let mut boundary = clamped;
+    while !content.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    content[..boundary].graphemes(true).count()
+}
+
+fn content_offset(content: &str, secret: bool, display_offset: usize) -> usize {
+    if !secret {
+        let mut index = display_offset.min(content.len());
+        while !content.is_char_boundary(index) {
+            index -= 1;
+        }
+        return index;
+    }
+    content
+        .grapheme_indices(true)
+        .nth(display_offset)
+        .map_or(content.len(), |(index, _)| index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_masking_counts_graphemes_and_maps_offsets_across_unicode() {
+        let value = "пароль🔑";
+        assert_eq!(masked_secret(value), "*******");
+        for (grapheme_index, (byte_index, _)) in value.grapheme_indices(true).enumerate() {
+            assert_eq!(display_offset(value, true, byte_index), grapheme_index);
+            assert_eq!(content_offset(value, true, grapheme_index), byte_index);
+        }
+        assert_eq!(display_offset(value, true, value.len()), 7);
+        assert_eq!(content_offset(value, true, 7), value.len());
+        assert_eq!(content_offset(value, true, 99), value.len());
+    }
+
+    #[test]
+    fn paste_sanitizes_crlf_and_bare_carriage_returns() {
+        assert_eq!(sanitize_single_line("a\r\nb\rc\nd"), "a b c d");
     }
 }

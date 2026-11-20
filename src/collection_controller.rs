@@ -1,10 +1,6 @@
 //! Resolves a collection into a queue, owning cancellation, errors and retry state.
 use crate::{
-    api::Navidrome,
-    collection::Collection,
-    failure::{Failure, RetryAction},
-    models::Song,
-    requests::Requests,
+    api::Navidrome, collection::Collection, failure::Failure, models::Song, requests::Requests,
 };
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
@@ -21,7 +17,7 @@ pub struct CollectionController {
     requests: Requests,
     pending: Option<Collection>,
     ready: Option<Arc<Vec<Song>>>,
-    failure: Option<Failure>,
+    failure: Option<Failure<Collection>>,
     task: Option<Task<()>>,
 }
 
@@ -32,7 +28,7 @@ impl CollectionController {
         self.pending.as_ref()
     }
 
-    pub fn failure(&self) -> Option<&Failure> {
+    pub fn failure(&self) -> Option<&Failure<Collection>> {
         self.failure.as_ref()
     }
 
@@ -77,7 +73,7 @@ impl CollectionController {
     }
 
     pub fn retry(&mut self, client: Navidrome, cx: &mut Context<Self>) {
-        if let Some(RetryAction::Collection(collection)) = self
+        if let Some(collection) = self
             .failure
             .as_ref()
             .and_then(|failure| failure.retry.clone())
@@ -105,7 +101,7 @@ impl CollectionController {
                 self.failure = Some(
                     Failure::new(
                         format!("Could not play {}: {error:#}", collection.name()),
-                        RetryAction::Collection(collection),
+                        collection,
                     )
                     .log_error(),
                 );
@@ -191,12 +187,12 @@ mod tests {
         assert!(controller.pending().is_none());
         // Observing a transport change cancels work while keeping Retry useful.
         controller.cancel_pending();
-        assert!(matches!(
+        assert!(
             controller
                 .failure()
-                .and_then(|failure| failure.retry.as_ref()),
-            Some(RetryAction::Collection(_))
-        ));
+                .and_then(|failure| failure.retry.as_ref())
+                .is_some()
+        );
         controller.dismiss_failure();
         assert!(controller.failure().is_none());
 

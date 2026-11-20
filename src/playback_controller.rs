@@ -1,7 +1,7 @@
 //! Playback policy and native media integration, independent of GPUI views.
 use crate::{
     api::Navidrome,
-    failure::{Failure, RetryAction},
+    failure::Failure,
     media::{MediaCommand, SystemMedia, seek_position},
     models::Song,
     player::{Playback, PlaybackStatus, Player},
@@ -16,13 +16,13 @@ pub struct PlaybackController {
     generation: u64,
     media: SystemMedia,
     volume: f32,
+    failure: Option<Failure<u64>>,
 }
 
 #[derive(Default)]
 pub struct PlaybackUpdate {
     pub changed: bool,
     pub track_changed: bool,
-    pub failure: Option<Failure>,
 }
 
 impl PlaybackController {
@@ -34,6 +34,7 @@ impl PlaybackController {
             generation: 0,
             media: SystemMedia::new(),
             volume,
+            failure: None,
         }
     }
     pub fn queue(&self) -> &PlayQueue {
@@ -42,23 +43,37 @@ impl PlaybackController {
     pub fn state(&self) -> &Playback {
         &self.state
     }
+    pub fn failure(&self) -> Option<&Failure<u64>> {
+        self.failure.as_ref()
+    }
+    pub fn set_message(&mut self, message: impl Into<String>) {
+        self.failure = Some(message.into().into());
+    }
+    pub fn dismiss_failure(&mut self) {
+        self.failure = None;
+    }
     pub fn duration(&self) -> u64 {
         self.queue
             .current()
             .map_or(0, |song| self.state.duration_or(song.duration))
     }
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
 
     pub fn play(&mut self, client: &Navidrome, songs: Arc<Vec<Song>>, index: usize) -> bool {
         self.queue.start(songs, index) && self.restart(client)
+    }
+    pub fn retry(&mut self, client: &Navidrome) -> bool {
+        if self.failure.take().and_then(|failure| failure.retry) == Some(self.generation) {
+            self.restart(client)
+        } else {
+            false
+        }
     }
     pub fn restart(&mut self, client: &Navidrome) -> bool {
         let Some(song) = self.queue.current() else {
             return false;
         };
         self.generation = self.generation.wrapping_add(1);
+        self.failure = None;
         if !self.player.available() {
             self.player = Player::new(self.volume);
         }
@@ -126,6 +141,7 @@ impl PlaybackController {
     }
     fn stop(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.failure = None;
         self.player.stop();
         self.state = Playback {
             generation: self.generation,
@@ -194,7 +210,6 @@ impl PlaybackController {
         let mut update = PlaybackUpdate {
             changed: generation != self.generation,
             track_changed: generation != self.generation,
-            failure: None,
         };
         if snapshot.generation != self.generation {
             return update;
@@ -202,12 +217,11 @@ impl PlaybackController {
         if let Some(error) = snapshot.error()
             && self.state.error() != Some(error)
         {
-            update.failure =
-                Some(Failure::new(error, RetryAction::Playback(self.generation)).log_error());
+            self.failure = Some(Failure::new(error, self.generation).log_error());
         } else if snapshot.warning != self.state.warning
             && let Some((_, message)) = &snapshot.warning
         {
-            update.failure = Some(Failure::from(message.clone()).log_error());
+            self.failure = Some(Failure::from(message.clone()).log_error());
         }
         let finished = snapshot.is_finished() && !self.state.is_finished();
         update.changed |= self.state.position.as_secs() != snapshot.position.as_secs()

@@ -4,15 +4,13 @@ use crate::folders::{FolderEntry, parent_path};
 use super::columns::{Column, column_header, column_layout, column_message};
 
 impl PlayerView {
-    pub(super) fn reset_folder_columns(&mut self) {
-        self.folder_parent_scroll = UniformListScrollHandle::new();
-        self.folder_preview_scroll = UniformListScrollHandle::new();
+    pub(super) fn center_folder_parent(&self) {
         if let Page::Folder(path) = &self.library.browser().state().page
             && let Some(parent) = parent_path(path)
             && let Some(folder) = self.library.browser().folder(parent)
             && let Some(row) = folder.row_of(FolderEntry::Folder(path))
         {
-            self.folder_parent_scroll
+            self.column_scroll(&PageId::Folder(parent.to_owned()))
                 .scroll_to_item(row, ScrollStrategy::Center);
         }
     }
@@ -71,11 +69,7 @@ impl PlayerView {
         } else {
             child.and_then(|child| folder?.row_of(FolderEntry::Folder(child)))
         };
-        let scroll = match column {
-            Column::Parent => self.folder_parent_scroll.clone(),
-            Column::Current => self.list_scroll.clone(),
-            Column::Preview => self.folder_preview_scroll.clone(),
-        };
+        let scroll = self.column_scroll(&PageId::Folder(path.to_owned()));
         #[cfg(feature = "ui-tests")]
         self.ui_probe.borrow_mut().columns.insert(
             match column {

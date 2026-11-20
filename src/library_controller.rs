@@ -1,7 +1,7 @@
 //! Coordinates library navigation, loading, cached pages and retry state.
 use crate::{
     browser::{AlbumPage, Browser, BrowserEntry, LibraryRequest, Page},
-    failure::{Failure, RetryAction},
+    failure::Failure,
     library_loader::{LibraryLoader, LoadContext, LoadOutcome},
     models::Song,
     navigation::Section,
@@ -28,9 +28,9 @@ pub struct LibraryController {
     browser: Browser,
     loader: Entity<LibraryLoader>,
     preview_loader: Entity<LibraryLoader>,
-    preview_failure: Option<Failure>,
+    preview_failure: Option<Failure<LibraryRequest>>,
     pending_selection: Option<PendingSelection>,
-    failure: Option<Failure>,
+    failure: Option<Failure<LibraryRequest>>,
 }
 
 impl LibraryController {
@@ -55,7 +55,7 @@ impl LibraryController {
         &self.preview_loader
     }
 
-    pub fn preview_failure(&self) -> Option<&Failure> {
+    pub fn preview_failure(&self) -> Option<&Failure<LibraryRequest>> {
         self.preview_failure.as_ref()
     }
 
@@ -106,13 +106,8 @@ impl LibraryController {
                     .accept_preview(&outcome.context.request.page, data);
             }
             Err(error) => {
-                self.preview_failure = Some(
-                    Failure::new(
-                        format!("{error:#}"),
-                        RetryAction::Library(outcome.context.request),
-                    )
-                    .log_error(),
-                )
+                self.preview_failure =
+                    Some(Failure::new(format!("{error:#}"), outcome.context.request).log_error())
             }
         }
     }
@@ -122,7 +117,7 @@ impl LibraryController {
         self.sync_preview(context, cx);
     }
 
-    pub fn failure(&self) -> Option<&Failure> {
+    pub fn failure(&self) -> Option<&Failure<LibraryRequest>> {
         self.failure.as_ref()
     }
     pub fn dismiss_failure(&mut self) {
@@ -295,11 +290,7 @@ impl LibraryController {
         if !context.session.is_active() || self.is_loading(cx) {
             return None;
         }
-        let Some(RetryAction::Library(request)) =
-            self.failure.take().and_then(|failure| failure.retry)
-        else {
-            return None;
-        };
+        let request = self.failure.take().and_then(|failure| failure.retry)?;
         self.load(request, context, cx)
     }
 
@@ -343,10 +334,7 @@ impl LibraryController {
                 restored_folder = self.resolve_selection();
             }
             Err(error) => {
-                self.failure = Some(
-                    Failure::new(format!("{error:#}"), RetryAction::Library(context.request))
-                        .log_error(),
-                )
+                self.failure = Some(Failure::new(format!("{error:#}"), context.request).log_error())
             }
         }
         LibraryChange { restored_folder }

@@ -24,13 +24,10 @@ Icons are embedded at compile time; no runtime download or icon font is used.
 | `previous` | `assets/fill/skip-back-fill.svg` |
 | `next` | `assets/fill/skip-forward-fill.svg` |
 | `back` | `assets/regular/caret-left.svg` |
-| `forward` | `assets/regular/caret-right.svg` |
 | `volume` | `assets/regular/speaker-high.svg` |
 | `volume-muted` | Speaker outline from `speaker-high.svg` with a cross |
 | `search` | `assets/regular/magnifying-glass.svg` |
 | `logout` | `assets/regular/sign-out.svg` |
-| `plus` | `assets/regular/plus.svg` |
-| `minus` | `assets/regular/minus.svg` |
 | `refresh` | `assets/regular/arrow-clockwise.svg` |
 | `sidebar-expand` | Composition of `sidebar-simple.svg` and `caret-right.svg` (regular) |
 | `sidebar-collapse` | Composition of `sidebar-simple.svg` and `caret-left.svg` (regular) |

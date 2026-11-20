@@ -53,7 +53,7 @@ impl Default for Preferences {
 }
 
 impl Preferences {
-    fn normalized(mut self) -> Self {
+    fn normalize(&mut self) {
         self.volume = if self.volume.is_finite() {
             self.volume.clamp(0., 1.)
         } else {
@@ -66,6 +66,10 @@ impl Preferences {
                 minimum
             };
         }
+    }
+
+    fn normalized(mut self) -> Self {
+        self.normalize();
         self
     }
 }
@@ -323,7 +327,7 @@ impl Settings {
     pub fn update(&mut self, change: impl FnOnce(&mut Preferences)) {
         let previous = self.value.clone();
         change(&mut self.value);
-        self.value = self.value.clone().normalized();
+        self.value.normalize();
         if self.value != previous {
             let _ = self.sender.send(Write::Save(self.value.clone()));
         }
